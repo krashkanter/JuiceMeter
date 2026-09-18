@@ -36,12 +36,17 @@ at.
 No installer, no service, nothing to uninstall. Delete the folder and it is
 gone.
 
+The exe is not code-signed, so the first launch shows **"Windows protected your
+PC"**. Click *More info*, then *Run anyway*. You will then get the usual UAC
+prompt.
+
 Admin is what unlocks CPU package power. Without it the app still runs and
 battery measurement is exact, but AC figures stay rough estimates and the
 baseline never learns. Tick **Run on startup** inside the app and it registers a
 scheduled task, so it comes back elevated at login with no UAC prompt.
 
-> `JuiceMeter-win-x64.zip` is the same app at a tenth the size, but needs the
+> The self-contained zip is ~60 MB because it carries the .NET runtime.
+> `JuiceMeter-win-x64.zip` is the same app at ~1 MB, but needs the
 > [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
 > already installed.
 
