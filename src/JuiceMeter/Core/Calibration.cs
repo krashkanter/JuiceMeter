@@ -17,6 +17,23 @@ namespace JuiceMeter.Core;
 /// </summary>
 public sealed class CalibrationModel
 {
+    /// <summary>
+    /// Bumped whenever the meaning of a banked residual changes, so stale data
+    /// is thrown away instead of quietly poisoning the model.
+    ///
+    /// v2: residuals are only banked when CPU package power is readable. Before
+    /// that, anything learned without the CPU figure was mostly CPU draw, which
+    /// inflated the baseline and then got counted a second time on AC.
+    /// </summary>
+    public const int CurrentVersion = 2;
+
+    /// <summary>
+    /// What produced the banked residuals. Zero means a file written before
+    /// versioning existed, which is exactly the data v2 was introduced to throw
+    /// away, so it is treated as stale rather than trusted by default.
+    /// </summary>
+    public int Version { get; set; }
+
     public const int BucketCount = 11;      // brightness 0-9, 10-19, ... 100
     public const int WindowSize = 900;      // 15 minutes at 1 Hz
 
@@ -167,8 +184,22 @@ public sealed class CalibrationModel
         GlobalWatts = 0;
         GlobalSamples = 0;
         LastObserved = null;
+        Version = CurrentVersion;
         _globalDirty = false;
         Array.Clear(_dirty);
+    }
+
+    /// <summary>
+    /// Throws away residuals banked by an older, wronger version of the model.
+    /// Returns how many samples were discarded, so the caller can say so.
+    /// </summary>
+    public int DiscardIfStale()
+    {
+        if (Version == CurrentVersion) return 0;
+
+        var discarded = GlobalSamples;
+        Reset();
+        return discarded;
     }
 
     /// <summary>Brightness buckets that have enough samples to stand on their own.</summary>

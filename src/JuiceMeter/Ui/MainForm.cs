@@ -25,6 +25,11 @@ internal sealed class MainForm : Form
     private DateTime _nextTotalsRefresh = DateTime.MinValue;
     private bool _suppressStartupEvent;
 
+    /// <summary>Device pixels per 96-DPI layout unit.</summary>
+    private readonly float _s;
+
+    private int Px(int designPixels) => (int)Math.Round(designPixels * _s);
+
     public bool ExitRequested { get; set; }
 
     public MainForm(PowerMonitor monitor, Settings settings)
@@ -34,12 +39,23 @@ internal sealed class MainForm : Form
         _header = new HeaderPanel();
         _side = new SidePanel(monitor, settings);
 
+        // Sizes below are authored at 96 DPI and scaled through Px().
+        //
+        // Auto-scaling is off deliberately. Under PerMonitorV2 the framework
+        // does not scale a hand-built layout the way AutoScaleMode.Dpi implies,
+        // and half-applying it left the containers at raw pixels while
+        // point-sized fonts still grew with the monitor -- which is what pushed
+        // text outside its panel on a 125% display. Owning the arithmetic here
+        // keeps it in lockstep with Theme.Scale used by the painting code.
+        AutoScaleMode = AutoScaleMode.None;
+        _s = DeviceDpi / 96f;
+
         Text = "Juice Meter";
         BackColor = Theme.Bg;
         ForeColor = Theme.Text;
         Font = Theme.Body;
-        ClientSize = new Size(1000, 752);
-        MinimumSize = new Size(900, 700);
+        ClientSize = new Size(Px(1000), Px(770));
+        MinimumSize = new Size(Px(900), Px(718));
         StartPosition = FormStartPosition.CenterScreen;
         DoubleBuffered = true;
 
@@ -81,31 +97,37 @@ internal sealed class MainForm : Form
     {
         var chartArea = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };
         _breakdown.Dock = DockStyle.Bottom;
-        _breakdown.Height = 120;
+        _breakdown.Height = Px(120);
         _spark.Dock = DockStyle.Fill;
         _spark.Caption = "Power draw, last 15 minutes";
         _spark.Capacity = SparkCapacity();
 
         chartArea.Controls.Add(_spark);
-        chartArea.Controls.Add(Spacer(DockStyle.Bottom, 12));
+        chartArea.Controls.Add(Spacer(DockStyle.Bottom, Px(12)));
         chartArea.Controls.Add(_breakdown);
 
         _side.Dock = DockStyle.Right;
-        _side.Width = 320;
+        _side.Width = Px(320);
 
-        var body = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg, Padding = new Padding(16, 0, 16, 0) };
+        var body = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = Theme.Bg,
+            Padding = new Padding(Px(16), 0, Px(16), 0),
+        };
+
         body.Controls.Add(chartArea);
-        body.Controls.Add(Spacer(DockStyle.Right, 12));
+        body.Controls.Add(Spacer(DockStyle.Right, Px(12)));
         body.Controls.Add(_side);
 
         var cards = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 106,
+            Height = Px(106),
             ColumnCount = 4,
             RowCount = 1,
             BackColor = Theme.Bg,
-            Padding = new Padding(16, 0, 16, 12),
+            Padding = new Padding(Px(16), 0, Px(16), Px(12)),
         };
 
         for (var i = 0; i < 4; i++) cards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25f));
@@ -113,14 +135,14 @@ internal sealed class MainForm : Form
         foreach (var card in new[] { _today, _month, _lifetime, _battery })
         {
             card.Dock = DockStyle.Fill;
-            card.Margin = new Padding(0, 0, 12, 0);
+            card.Margin = new Padding(0, 0, Px(12), 0);
         }
 
         _battery.Margin = new Padding(0);
         cards.Controls.AddRange(new Control[] { _today, _month, _lifetime, _battery });
 
         _header.Dock = DockStyle.Top;
-        _header.Height = 104;
+        _header.Height = Px(122);
 
         BuildFooter(out var footer);
         BuildBanner();
@@ -140,9 +162,9 @@ internal sealed class MainForm : Form
         footer = new Panel
         {
             Dock = DockStyle.Bottom,
-            Height = 60,
+            Height = Px(62),
             BackColor = Theme.Bg,
-            Padding = new Padding(16, 12, 16, 14),
+            Padding = new Padding(Px(16), Px(12), Px(16), Px(14)),
         };
 
         _runOnStartup.Text = "Run on startup";
@@ -150,7 +172,7 @@ internal sealed class MainForm : Form
         _runOnStartup.Dock = DockStyle.Left;
         _runOnStartup.ForeColor = Theme.Text;
         _runOnStartup.BackColor = Color.Transparent;
-        _runOnStartup.Padding = new Padding(0, 7, 0, 0);
+        _runOnStartup.Padding = new Padding(0, Px(7), 0, 0);
         _runOnStartup.CheckedChanged += OnRunOnStartupChanged;
         SyncStartupCheckbox();
 
@@ -159,7 +181,7 @@ internal sealed class MainForm : Form
         _status.ForeColor = Theme.TextFaint;
         _status.Font = Theme.Small;
         _status.TextAlign = ContentAlignment.MiddleLeft;
-        _status.Padding = new Padding(18, 0, 0, 0);
+        _status.Padding = new Padding(Px(18), 0, 0, 0);
 
         footer.Controls.Add(_status);
         footer.Controls.Add(_runOnStartup);
@@ -174,7 +196,7 @@ internal sealed class MainForm : Form
         {
             button.Dock = DockStyle.Right;
             footer.Controls.Add(button);
-            footer.Controls.Add(Spacer(DockStyle.Right, 8));
+            footer.Controls.Add(Spacer(DockStyle.Right, Px(8)));
         }
     }
 
@@ -208,7 +230,7 @@ internal sealed class MainForm : Form
         _banner.Dock = DockStyle.Top;
         _banner.Height = 0;
         _banner.BackColor = Theme.IsLight ? Color.FromArgb(255, 244, 222) : Color.FromArgb(56, 44, 22);
-        _banner.Padding = new Padding(18, 6, 12, 6);
+        _banner.Padding = new Padding(Px(18), Px(6), Px(12), Px(6));
         _banner.Visible = false;
 
         // CPU package power is the one that matters: without it the baseline
@@ -221,6 +243,9 @@ internal sealed class MainForm : Form
             ForeColor = Theme.Accent,
             Font = Theme.Small,
             Tag = "accent",
+            // Narrow the window far enough and this sentence runs out of room;
+            // trail off with an ellipsis instead of slicing a word in half.
+            AutoEllipsis = true,
             TextAlign = ContentAlignment.MiddleLeft,
             Text = Sensors.HardwareReader.IsElevated
                 ? $"CPU package power unavailable: {_monitor.HardwareStatus}. Battery readings are unaffected, but AC figures stay estimates."
@@ -230,7 +255,7 @@ internal sealed class MainForm : Form
         var action = new Button
         {
             Dock = DockStyle.Right,
-            Width = 152,
+            Width = Px(152),
             Text = Sensors.HardwareReader.IsElevated ? "Dismiss" : "Restart as admin",
         };
 
@@ -252,7 +277,7 @@ internal sealed class MainForm : Form
 
         _banner.Controls.Add(message);
         _banner.Controls.Add(action);
-        _banner.Height = 40;
+        _banner.Height = Px(42);
         _banner.Visible = true;
     }
 
@@ -288,14 +313,16 @@ internal sealed class MainForm : Form
         BackColor = Theme.Bg,
     };
 
-    private static Button MakeButton(string text, EventHandler onClick, bool primary = false)
+    private Button MakeButton(string text, EventHandler onClick, bool primary = false)
     {
+        // TextRenderer measures at the current device DPI, so this width is
+        // already in device pixels; only the padding needs scaling.
         var button = new Button
         {
             Text = text,
             AutoSize = false,
-            Width = TextRenderer.MeasureText(text, Theme.Body).Width + 32,
-            Height = 34,
+            Width = TextRenderer.MeasureText(text, Theme.Body).Width + Px(32),
+            Height = Px(34),
         };
 
         Theme.StyleButton(button, primary);
@@ -342,8 +369,10 @@ internal sealed class MainForm : Form
 
                 _header.Update(sample, _monitor);
                 _spark.Push(sample.SystemWatts, sample.WallWatts, sample.OnAc);
-                _breakdown.Update(sample.CpuWatts, sample.GpuWatts, sample.BaselineWatts,
-                    sample.CpuSensorLive, sample.GpuSensorLive, _monitor.GpuSwitchedOff);
+                // CpuCoreWatts, not CpuWatts: the integrated slice is drawn as its
+                // own segment, so leaving it in the package would count it twice.
+                _breakdown.Update(sample.CpuCoreWatts, sample.IGpuWatts, sample.GpuWatts, sample.BaselineWatts,
+                    sample.CpuSensorLive, sample.IGpuSensorLive, sample.GpuSensorLive, _monitor.GpuSwitchedOff);
 
                 if (DateTime.UtcNow >= _nextTotalsRefresh)
                 {
@@ -499,41 +528,45 @@ internal sealed class MainForm : Form
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
+            var s = Theme.Scale(g);
+
             using (var background = new SolidBrush(Theme.Bg))
             {
                 g.FillRectangle(background, ClientRectangle);
             }
 
-            var bounds = new RectangleF(16, 0, Width - 32, Height - 12);
-            Theme.FillCard(g, bounds);
+            var card = new RectangleF(16 * s, 0, Width - 32 * s, Height - 12 * s);
+            Theme.FillCard(g, card);
 
             using var title = new SolidBrush(Theme.Text);
             using var dim = new SolidBrush(Theme.TextDim);
 
-            g.DrawString("Juice Meter", Theme.Title, title, 30, 14);
-            if (_subtitle.Length > 0) g.DrawString(_subtitle, Theme.Small, dim, 32, 38);
+            // Left column, stacked from measured heights rather than guessed offsets.
+            var left = card.X + 16 * s;
+            var y = card.Y + 14 * s;
+
+            g.DrawString("Juice Meter", Theme.Title, title, left, y);
+            y += g.MeasureString("Juice Meter", Theme.Title).Height + 2 * s;
+
+            if (_subtitle.Length > 0)
+            {
+                g.DrawString(_subtitle, Theme.Small, dim, left + 2 * s, y);
+                y += g.MeasureString(_subtitle, Theme.Small).Height + 6 * s;
+            }
 
             var sourceLabel = Theme.LabelFor(_sample.Source);
-            Theme.DrawChip(g, sourceLabel, new PointF(32, 62), Theme.ForSource(_sample.Source));
+            var chipX = left + 2 * s;
 
-            var chipWidth = Theme.ChipSize(g, sourceLabel).Width;
-            Theme.DrawChip(g, Theme.LabelFor(_sample.Confidence), new PointF(32 + chipWidth + 8, 62),
+            Theme.DrawChip(g, sourceLabel, new PointF(chipX, y), Theme.ForSource(_sample.Source));
+            chipX += Theme.ChipSize(g, sourceLabel).Width + 8 * s;
+
+            Theme.DrawChip(g, Theme.LabelFor(_sample.Confidence), new PointF(chipX, y),
                 Theme.ForConfidence(_sample.Confidence));
 
-            // Live wattage, right aligned.
+            // Right column: live wattage, then two lines of context under it.
             var watts = _sample.OnAc ? _sample.WallWatts : _sample.SystemWatts;
             var value = watts.ToString("F1", CultureInfo.CurrentCulture);
-
-            var valueSize = g.MeasureString(value, Theme.Huge);
-            var unitSize = g.MeasureString("W", Theme.Title);
-            var right = bounds.Right - 24;
-
-            g.DrawString("W", Theme.Title, dim, right - unitSize.Width, 38);
-            g.DrawString(value, Theme.Huge, title, right - unitSize.Width - valueSize.Width + 8, 10);
-
             var caption = _sample.OnAc ? "from the wall" : "from the battery";
-            var captionSize = g.MeasureString(caption, Theme.Small);
-            g.DrawString(caption, Theme.Small, dim, right - captionSize.Width, 70);
 
             string? detail = null;
 
@@ -550,11 +583,30 @@ internal sealed class MainForm : Form
                 detail = $"{Format.Hours(runtime.TotalSeconds)} remaining";
             }
 
-            if (detail is not null)
-            {
-                var detailSize = g.MeasureString(detail, Theme.Small);
-                g.DrawString(detail, Theme.Small, dim, right - detailSize.Width, 86);
-            }
+            var right = card.Right - 24 * s;
+            var valueSize = g.MeasureString(value, Theme.Huge);
+            var unitSize = g.MeasureString("W", Theme.Title);
+            var captionSize = g.MeasureString(caption, Theme.Small);
+
+            var numberY = card.Y + 8 * s;
+
+            g.DrawString(value, Theme.Huge, title, right - unitSize.Width - valueSize.Width + 8 * s, numberY);
+            g.DrawString("W", Theme.Title, dim,
+                right - unitSize.Width, numberY + valueSize.Height - unitSize.Height - 8 * s);
+
+            var captionY = numberY + valueSize.Height + 2 * s;
+            g.DrawString(caption, Theme.Small, dim, right - captionSize.Width, captionY);
+
+            if (detail is null) return;
+
+            var detailSize = g.MeasureString(detail, Theme.Small);
+            var detailY = captionY + captionSize.Height + 1 * s;
+
+            // Drop the line rather than let it spill out of the card. This is what
+            // used to push "2h 36m remaining" outside the header panel.
+            if (detailY + detailSize.Height > card.Bottom - 4 * s) return;
+
+            g.DrawString(detail, Theme.Small, dim, right - detailSize.Width, detailY);
         }
     }
 
@@ -594,22 +646,23 @@ internal sealed class MainForm : Form
             using var text = new SolidBrush(Theme.Text);
             using var faint = new SolidBrush(Theme.TextFaint);
 
-            g.DrawString("Last 7 days", Theme.SmallBold, heading, 14, 12);
+            var s = Theme.Scale(g);
+            g.DrawString("Last 7 days", Theme.SmallBold, heading, 14 * s, 12 * s);
 
             var peak = 0.001;
             foreach (var day in _days) peak = Math.Max(peak, day.WallUnits);
 
-            var y = 36f;
+            var y = 36f * s;
             foreach (var day in _days)
             {
                 var isToday = day.Date == DateTime.Today;
                 var label = isToday ? "Today" : day.Date.ToString("ddd d", CultureInfo.CurrentCulture);
 
-                g.DrawString(label, isToday ? Theme.SmallBold : Theme.Small, isToday ? text : faint, 14, y);
+                g.DrawString(label, isToday ? Theme.SmallBold : Theme.Small, isToday ? text : faint, 14 * s, y);
 
-                var track = new RectangleF(72, y + 4, Width - 72 - 84, 9);
+                var track = new RectangleF(72 * s, y + 4 * s, Width - 156 * s, 9 * s);
                 using (var trackBrush = new SolidBrush(Theme.Grid))
-                using (var path = Theme.RoundedRect(track, 2f))
+                using (var path = Theme.RoundedRect(track, 2f * s))
                 {
                     g.FillPath(trackBrush, path);
                 }
@@ -617,28 +670,28 @@ internal sealed class MainForm : Form
                 var fraction = (float)(day.WallUnits / peak);
                 if (fraction > 0.005f)
                 {
-                    var fill = new RectangleF(track.X, track.Y, Math.Max(3f, track.Width * fraction), track.Height);
+                    var fill = new RectangleF(track.X, track.Y, Math.Max(3f * s, track.Width * fraction), track.Height);
                     using var fillBrush = new SolidBrush(isToday ? Theme.Accent : Color.FromArgb(130, Theme.Accent));
-                    using var path = Theme.RoundedRect(fill, 2f);
+                    using var path = Theme.RoundedRect(fill, 2f * s);
                     g.FillPath(fillBrush, path);
                 }
 
                 var units = Format.Units(day.WallUnits);
                 var unitsSize = g.MeasureString(units, Theme.Small);
-                g.DrawString(units, Theme.Small, isToday ? text : faint, Width - 16 - unitsSize.Width, y);
+                g.DrawString(units, Theme.Small, isToday ? text : faint, Width - 16 * s - unitsSize.Width, y);
 
-                y += 23;
+                y += 23 * s;
             }
 
-            y += 12;
+            y += 12 * s;
             using (var divider = new Pen(Theme.Border))
             {
-                g.DrawLine(divider, 14, y, Width - 14, y);
+                g.DrawLine(divider, 14 * s, y, Width - 14 * s, y);
             }
-            y += 14;
+            y += 14 * s;
 
-            g.DrawString("Details", Theme.SmallBold, heading, 14, y);
-            y += 22;
+            g.DrawString("Details", Theme.SmallBold, heading, 14 * s, y);
+            y += 22 * s;
 
             var sample = _monitor.Latest;
             var calibration = _monitor.State.Calibration;
@@ -654,6 +707,7 @@ internal sealed class MainForm : Form
                     : $"{calibration.GlobalSamples:N0} / 120 samples");
 
             if (_monitor.GpuSwitchedOff) Row(g, ref y, "Discrete GPU", "off (Eco)");
+            if (sample.IGpuSensorLive) Row(g, ref y, "Integrated GPU", $"{sample.IGpuWatts:F1} W of package");
             if (sample.BrightnessPercent >= 0) Row(g, ref y, "Brightness", $"{sample.BrightnessPercent}%");
             if (sample.BatteryVolts > 0) Row(g, ref y, "Pack voltage", $"{sample.BatteryVolts:F2} V");
 
@@ -675,14 +729,18 @@ internal sealed class MainForm : Form
 
         private void Row(Graphics g, ref float y, string label, string value)
         {
-            if (y > Height - 24) return;
+            var s = Theme.Scale(g);
+            var lineHeight = g.MeasureString(label, Theme.Small).Height;
+
+            // Stop before the card border rather than painting over it.
+            if (y + lineHeight > Height - 10 * s) return;
 
             using var labelBrush = new SolidBrush(Theme.TextFaint);
             using var valueBrush = new SolidBrush(Theme.Text);
 
-            g.DrawString(label, Theme.Small, labelBrush, 14, y);
+            g.DrawString(label, Theme.Small, labelBrush, 14 * s, y);
 
-            var maxWidth = Width - 28 - 92;
+            var maxWidth = Width - 28 * s - 92 * s;
             using var right = new StringFormat
             {
                 Alignment = StringAlignment.Far,
@@ -691,9 +749,9 @@ internal sealed class MainForm : Form
             };
 
             g.DrawString(value, Theme.Small, valueBrush,
-                new RectangleF(Width - 14 - maxWidth, y, maxWidth, 18), right);
+                new RectangleF(Width - 14 * s - maxWidth, y, maxWidth, lineHeight + 2 * s), right);
 
-            y += 19;
+            y += lineHeight + 4 * s;
         }
     }
 }

@@ -36,7 +36,7 @@ public sealed class PowerMonitor : IDisposable
 
     private DateTime _minute = DateTime.MinValue;
     private double _mSeconds, _mWallWh, _mSystemWh, _mBattOutWh, _mBattInWh;
-    private double _mSystemWs, _mWallWs, _mCpuWs, _mGpuWs, _mBaseWs, _mBattPctS;
+    private double _mSystemWs, _mWallWs, _mCpuWs, _mGpuWs, _mIGpuWs, _mBaseWs, _mBattPctS;
     private PowerSource _mSource = PowerSource.Unknown;
     private Confidence _mConfidence = Confidence.Measured;
 
@@ -165,7 +165,13 @@ public sealed class PowerMonitor : IDisposable
         // Always go through Read when sensors are enabled, even if nothing is
         // currently readable: that call is also what notices the discrete GPU
         // being switched off or coming back.
-        var (cpu, gpu) = _settings.EnableHardwareSensors ? _hardware.Read() : (double.NaN, double.NaN);
+        var reading = _settings.EnableHardwareSensors ? _hardware.Read() : HardwareReading.None;
+
+        // cpu is the whole package, which already contains igpu. Only these two
+        // ever enter a total; igpu exists purely so the UI can split the bar.
+        var cpu = reading.CpuPackageWatts;
+        var gpu = reading.DGpuWatts;
+        var igpu = reading.IGpuWatts;
 
         var source = ResolveSource(battery);
         var batteryWatts = battery.RateKnown ? battery.Watts : 0;
@@ -179,7 +185,7 @@ public sealed class PowerMonitor : IDisposable
             systemWatts = -batteryWatts;
             confidence = Confidence.Measured;
 
-            var known = (double.IsNaN(cpu) ? 0 : cpu) + (double.IsNaN(gpu) ? 0 : gpu);
+            var known = reading.KnownWatts;
             baseline = systemWatts - known;
 
             // Only bank the residual when CPU package power is actually readable.
@@ -235,6 +241,7 @@ public sealed class PowerMonitor : IDisposable
             WallWatts = wallWatts,
             CpuWatts = double.IsNaN(cpu) ? 0 : cpu,
             GpuWatts = double.IsNaN(gpu) ? 0 : gpu,
+            IGpuWatts = double.IsNaN(igpu) ? 0 : igpu,
             BaselineWatts = Math.Max(0, baseline),
             BatteryWatts = batteryWatts,
             BatteryPresent = battery.Present,
@@ -248,6 +255,7 @@ public sealed class PowerMonitor : IDisposable
             HardwareSensorsLive = _hardware.Available,
             CpuSensorLive = !double.IsNaN(cpu),
             GpuSensorLive = !double.IsNaN(gpu),
+            IGpuSensorLive = !double.IsNaN(igpu),
         };
 
         Integrate(sample, dt);
@@ -292,6 +300,7 @@ public sealed class PowerMonitor : IDisposable
         var inW = (Math.Max(0, previous.BatteryWatts) + Math.Max(0, current.BatteryWatts)) / 2.0;
         var cpuW = (previous.CpuWatts + current.CpuWatts) / 2.0;
         var gpuW = (previous.GpuWatts + current.GpuWatts) / 2.0;
+        var igpuW = (previous.IGpuWatts + current.IGpuWatts) / 2.0;
         var baseW = (previous.BaselineWatts + current.BaselineWatts) / 2.0;
 
         RollMinuteIfNeeded(current.Timestamp.LocalDateTime);
@@ -306,6 +315,7 @@ public sealed class PowerMonitor : IDisposable
         _mWallWs += wallW * dt;
         _mCpuWs += cpuW * dt;
         _mGpuWs += gpuW * dt;
+        _mIGpuWs += igpuW * dt;
         _mBaseWs += baseW * dt;
         _mBattPctS += current.BatteryPercent * dt;
 
@@ -365,6 +375,7 @@ public sealed class PowerMonitor : IDisposable
             _mWallWs / _mSeconds,
             _mCpuWs / _mSeconds,
             _mGpuWs / _mSeconds,
+            _mIGpuWs / _mSeconds,
             _mBaseWs / _mSeconds,
             _mBattPctS / _mSeconds);
 
@@ -384,7 +395,7 @@ public sealed class PowerMonitor : IDisposable
     private void ResetMinute()
     {
         _mSeconds = _mWallWh = _mSystemWh = _mBattOutWh = _mBattInWh = 0;
-        _mSystemWs = _mWallWs = _mCpuWs = _mGpuWs = _mBaseWs = _mBattPctS = 0;
+        _mSystemWs = _mWallWs = _mCpuWs = _mGpuWs = _mIGpuWs = _mBaseWs = _mBattPctS = 0;
         _mConfidence = Confidence.Measured;
     }
 
@@ -428,7 +439,7 @@ public sealed class PowerMonitor : IDisposable
             if (!File.Exists(path))
             {
                 File.AppendAllText(path,
-                    "time,source,confidence,system_w,wall_w,cpu_w,gpu_w,base_w,batt_w,batt_pct,brightness\n");
+                    "time,source,confidence,system_w,wall_w,cpu_w,igpu_w,gpu_w,base_w,batt_w,batt_pct,brightness\n");
             }
 
             File.AppendAllText(path, string.Join(',',
@@ -438,6 +449,7 @@ public sealed class PowerMonitor : IDisposable
                 s.SystemWatts.ToString("F2", inv),
                 s.WallWatts.ToString("F2", inv),
                 s.CpuWatts.ToString("F2", inv),
+                s.IGpuWatts.ToString("F2", inv),
                 s.GpuWatts.ToString("F2", inv),
                 s.BaselineWatts.ToString("F2", inv),
                 s.BatteryWatts.ToString("F2", inv),

@@ -176,8 +176,10 @@ internal static class Probe
         Console.WriteLine($"Panel brightness: {(brightness >= 0 ? brightness + "%" : "not reported")}");
         Console.WriteLine();
 
-        Console.WriteLine("time      source       batt_W    cpu_W    gpu_W   base_W  system_W    wall_W");
-        Console.WriteLine("--------  -----------  -------  -------  -------  -------  --------  --------");
+        // cpu_W is the whole package and igpu_W is the graphics slice inside it,
+        // so cpu_W + gpu_W is the total; adding igpu_W would count it twice.
+        Console.WriteLine("time      source       batt_W    cpu_W   igpu_W    gpu_W   base_W  system_W    wall_W");
+        Console.WriteLine("--------  -----------  -------  -------  -------  -------  -------  --------  --------");
 
         var settings = Settings.Load();
         var state = AppState.Load();
@@ -185,7 +187,10 @@ internal static class Probe
         for (var i = 0; i < seconds; i++)
         {
             var reading = battery.Read();
-            var (cpu, gpu) = hardware.Read();
+            var probe = hardware.Read();
+            var cpu = probe.CpuPackageWatts;
+            var igpu = probe.IGpuWatts;
+            var gpu = probe.DGpuWatts;
 
             var source = !reading.AcOnline
                 ? "battery"
@@ -219,6 +224,7 @@ internal static class Probe
                 source.PadRight(11),
                 Col(reading.RateKnown ? reading.Watts : double.NaN, 7),
                 Col(cpu, 7),
+                Col(igpu, 7),
                 Col(gpu, 7),
                 Col(baseline, 7),
                 Col(systemWatts, 8),

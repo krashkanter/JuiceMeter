@@ -16,6 +16,7 @@ public sealed record MinuteRow(
     double AvgSystemWatts,
     double AvgWallWatts,
     double AvgCpuWatts,
+    double AvgIGpuWatts,
     double AvgGpuWatts,
     double AvgBaselineWatts,
     double BatteryPercent);
@@ -57,7 +58,19 @@ public sealed class HistoryStore
 {
     private const string Header =
         "local_time,unix_seconds,seconds,source,confidence,wall_wh,system_wh,batt_out_wh,batt_in_wh," +
+        "avg_system_w,avg_wall_w,avg_cpu_w,avg_igpu_w,avg_gpu_w,avg_base_w,batt_pct";
+
+    /// <summary>
+    /// The layout before avg_igpu_w existed. Files written by an older build are
+    /// upgraded in place rather than left to accumulate rows of two different
+    /// widths, which would quietly break anyone loading the month into a sheet.
+    /// </summary>
+    private const string HeaderV1 =
+        "local_time,unix_seconds,seconds,source,confidence,wall_wh,system_wh,batt_out_wh,batt_in_wh," +
         "avg_system_w,avg_wall_w,avg_cpu_w,avg_gpu_w,avg_base_w,batt_pct";
+
+    /// <summary>Where avg_igpu_w was inserted when upgrading a v1 row.</summary>
+    private const int IGpuColumn = 12;
 
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
@@ -71,6 +84,8 @@ public sealed class HistoryStore
             try
             {
                 var path = Paths.MonthFile(row.LocalMinute);
+                if (File.Exists(path)) UpgradeIfV1(path);
+
                 var isNew = !File.Exists(path);
 
                 var sb = new StringBuilder(256);
@@ -88,6 +103,7 @@ public sealed class HistoryStore
                   .Append(F(row.AvgSystemWatts, 2)).Append(',')
                   .Append(F(row.AvgWallWatts, 2)).Append(',')
                   .Append(F(row.AvgCpuWatts, 2)).Append(',')
+                  .Append(F(row.AvgIGpuWatts, 2)).Append(',')
                   .Append(F(row.AvgGpuWatts, 2)).Append(',')
                   .Append(F(row.AvgBaselineWatts, 2)).Append(',')
                   .Append(F(row.BatteryPercent, 1)).Append('\n');
@@ -224,10 +240,75 @@ public sealed class HistoryStore
         else if (row.Source is PowerSource.AcIdle or PowerSource.AcCharging) day.AcSeconds += row.Seconds;
     }
 
+    /// <summary>
+    /// Rewrites a month file written before avg_igpu_w existed, inserting a zero
+    /// column so the whole file keeps one shape. Zero is the honest value: that
+    /// build never measured the integrated GPU separately.
+    ///
+    /// Written to a temporary file and moved into place, so a crash halfway
+    /// through leaves the original month intact rather than a half-converted one.
+    /// </summary>
+    private static void UpgradeIfV1(string path)
+    {
+        try
+        {
+            using (var probe = new StreamReader(path, Encoding.UTF8))
+            {
+                // These files are written with a BOM. StreamReader normally eats
+                // it, but a stray one here would mean the header never matches,
+                // the upgrade never runs, and 16-column rows quietly get appended
+                // to a 15-column file -- so strip it rather than trust that.
+                var header = probe.ReadLine()?.TrimStart('﻿');
+                if (header is null || header != HeaderV1) return;
+            }
+
+            var temp = path + ".upgrading";
+
+            using (var reader = new StreamReader(path, Encoding.UTF8))
+            using (var writer = new StreamWriter(temp, false, Encoding.UTF8))
+            {
+                reader.ReadLine();
+                writer.Write(Header);
+                writer.Write('\n');
+
+                while (reader.ReadLine() is { } line)
+                {
+                    if (line.Length == 0) continue;
+
+                    var parts = line.Split(',');
+                    if (parts.Length != 15)
+                    {
+                        // Not a shape we understand; carry it across untouched
+                        // rather than corrupting it further.
+                        writer.Write(line);
+                        writer.Write('\n');
+                        continue;
+                    }
+
+                    writer.Write(string.Join(',', parts[..IGpuColumn]));
+                    writer.Write(",0.00,");
+                    writer.Write(string.Join(',', parts[IGpuColumn..]));
+                    writer.Write('\n');
+                }
+            }
+
+            File.Move(temp, path, overwrite: true);
+            Log.Info($"Upgraded history file to the avg_igpu_w schema: {Path.GetFileName(path)}");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Could not upgrade history file {Path.GetFileName(path)}", ex);
+        }
+    }
+
     private static MinuteRow? TryParse(string line)
     {
         var parts = line.Split(',');
         if (parts.Length < 15) return null;
+
+        // A v1 row has no avg_igpu_w, so everything from avg_gpu_w on sits one
+        // column to the left. Read both rather than refusing older history.
+        var hasIGpu = parts.Length >= 16;
 
         try
         {
@@ -249,9 +330,10 @@ public sealed class HistoryStore
                 D(parts[9]),
                 D(parts[10]),
                 D(parts[11]),
-                D(parts[12]),
-                D(parts[13]),
-                D(parts[14]));
+                hasIGpu ? D(parts[IGpuColumn]) : 0,
+                D(parts[hasIGpu ? 13 : 12]),
+                D(parts[hasIGpu ? 14 : 13]),
+                D(parts[hasIGpu ? 15 : 14]));
         }
         catch
         {

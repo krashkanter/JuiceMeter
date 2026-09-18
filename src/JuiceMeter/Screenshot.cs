@@ -74,6 +74,12 @@ internal static class Screenshot
 
         // WM_PRINT on a Form includes the frame, so the bitmap has to be the
         // whole window, not just the client area, or the bottom gets cropped.
+        using (var probe = form.CreateGraphics())
+        {
+            Log.Info($"Screenshot layout: deviceDpi={form.DeviceDpi} graphicsDpi={probe.DpiY} " +
+                     $"client={form.ClientSize} window={form.Size} autoScale={form.AutoScaleDimensions}");
+        }
+
         using var bitmap = new Bitmap(form.Width, form.Height);
         form.DrawToBitmap(bitmap, new Rectangle(0, 0, form.Width, form.Height));
 

@@ -5,6 +5,36 @@ using LibreHardwareMonitor.Hardware;
 namespace JuiceMeter.Sensors;
 
 /// <summary>
+/// One pass of the power sensors. Watts, or NaN for anything unreadable.
+///
+/// The important subtlety is that <see cref="IGpuWatts"/> is *inside*
+/// <see cref="CpuPackageWatts"/>, not alongside it. Intel reports integrated
+/// graphics as the RAPL PP1 domain, which the package domain already contains,
+/// so the two must never be summed -- that is where a double count would creep
+/// into the bill. Only the package and the discrete card are real, additive
+/// draws; the integrated figure exists so the UI can carve the package open.
+/// </summary>
+internal readonly record struct HardwareReading(
+    double CpuPackageWatts,
+    double IGpuWatts,
+    double DGpuWatts)
+{
+    public static HardwareReading None { get; } =
+        new(double.NaN, double.NaN, double.NaN);
+
+    /// <summary>Package power with the integrated graphics slice taken back out.</summary>
+    public double CpuCoreWatts =>
+        double.IsNaN(CpuPackageWatts) ? double.NaN
+        : double.IsNaN(IGpuWatts) ? CpuPackageWatts
+        : Math.Max(0, CpuPackageWatts - IGpuWatts);
+
+    /// <summary>Everything the sensors can account for, with nothing counted twice.</summary>
+    public double KnownWatts =>
+        (double.IsNaN(CpuPackageWatts) ? 0 : CpuPackageWatts) +
+        (double.IsNaN(DGpuWatts) ? 0 : DGpuWatts);
+}
+
+/// <summary>
 /// CPU and GPU package power, the two numbers an overlay like Afterburner or
 /// HWiNFO already surfaces.
 ///
@@ -33,11 +63,15 @@ internal sealed class HardwareReader : IDisposable
     public bool CpuPowerAvailable { get; private set; }
     public bool GpuPowerAvailable { get; private set; }
 
+    /// <summary>The RAPL graphics domain is readable, so the iGPU can be shown separately.</summary>
+    public bool IGpuPowerAvailable { get; private set; }
+
     /// <summary>The machine has a dGPU but it is currently switched off (Eco mode).</summary>
     public bool GpuSwitchedOff { get; private set; }
 
     public string? CpuName { get; private set; }
     public string? GpuName { get; private set; }
+    public string? IGpuName { get; private set; }
     public string Status { get; private set; } = "Not started";
 
     public static bool IsElevated
@@ -87,6 +121,7 @@ internal sealed class HardwareReader : IDisposable
 
             CpuPowerAvailable = false;
             GpuPowerAvailable = false;
+            IGpuPowerAvailable = false;
             _nvidiaInComputer = false;
 
             foreach (var hardware in _computer.Hardware)
@@ -97,11 +132,19 @@ internal sealed class HardwareReader : IDisposable
                         hardware.Update();
                         CpuName ??= hardware.Name;
                         if (FindCpuPower(hardware) is not null) CpuPowerAvailable = true;
+                        if (FindIGpuPower(hardware) is not null) IGpuPowerAvailable = true;
                         break;
 
-                    // Deliberately excluding HardwareType.GpuIntel: the integrated
-                    // GPU already sits inside the CPU package reading, and counting
-                    // it separately would double up.
+                    // The integrated GPU is reported, but only as a slice of the
+                    // package it already lives in -- see HardwareReading. Its node
+                    // is used for the name, and as a fallback for parts that do
+                    // not surface a graphics domain on the CPU itself.
+                    case HardwareType.GpuIntel:
+                        hardware.Update();
+                        IGpuName ??= hardware.Name;
+                        if (FindGpuPower(hardware) is not null) IGpuPowerAvailable = true;
+                        break;
+
                     case HardwareType.GpuNvidia:
                         if (!nvidiaRunning) break;
                         _nvidiaInComputer = true;
@@ -119,7 +162,8 @@ internal sealed class HardwareReader : IDisposable
             Available = CpuPowerAvailable || GpuPowerAvailable;
 
             Status = BuildStatus();
-            Log.Info($"Hardware sensors: {Status} (cpu={CpuName}, gpu={GpuName}, elevated={IsElevated})");
+            Log.Info($"Hardware sensors: {Status} (cpu={CpuName}, gpu={GpuName}, " +
+                     $"igpu={IGpuName ?? "-"}/{(IGpuPowerAvailable ? "ok" : "unavailable")}, elevated={IsElevated})");
 
             return Available;
         }
@@ -152,11 +196,11 @@ internal sealed class HardwareReader : IDisposable
     }
 
     /// <summary>Package power in watts. NaN for anything we cannot read.</summary>
-    public (double CpuWatts, double GpuWatts) Read()
+    public HardwareReading Read()
     {
         lock (_gate)
         {
-            if (_computer is null) return (double.NaN, double.NaN);
+            if (_computer is null) return HardwareReading.None;
 
             // Checked immediately before use, on purpose: the gap between this
             // and the NVML call is the entire window in which a mode switch
@@ -186,10 +230,10 @@ internal sealed class HardwareReader : IDisposable
                 CloseLocked();
                 OpenLocked();
 
-                if (_computer is null) return (double.NaN, double.NaN);
+                if (_computer is null) return HardwareReading.None;
             }
 
-            double cpu = double.NaN, gpu = double.NaN;
+            double cpu = double.NaN, gpu = double.NaN, igpu = double.NaN;
 
             try
             {
@@ -200,6 +244,15 @@ internal sealed class HardwareReader : IDisposable
                         case HardwareType.Cpu:
                             hardware.Update();
                             if (FindCpuPower(hardware) is { } c) cpu = double.IsNaN(cpu) ? c : cpu + c;
+                            if (FindIGpuPower(hardware) is { } ig) igpu = double.IsNaN(igpu) ? ig : igpu + ig;
+                            break;
+
+                        case HardwareType.GpuIntel:
+                            // Only consulted when the CPU node had no graphics
+                            // domain of its own; it reads the same silicon.
+                            if (!double.IsNaN(igpu)) break;
+                            hardware.Update();
+                            if (FindGpuPower(hardware) is { } ig2) igpu = ig2;
                             break;
 
                         case HardwareType.GpuNvidia when !_nvidiaInComputer:
@@ -223,7 +276,14 @@ internal sealed class HardwareReader : IDisposable
             // real zero rather than "unknown" and keep the AC model calibrated.
             if (GpuSwitchedOff) gpu = 0;
 
-            return (Sane(cpu, 200), Sane(gpu, 400));
+            var package = Sane(cpu, 200);
+
+            // Never let the slice exceed the whole: a stale or half-updated PP1
+            // counter would otherwise show a negative CPU bar.
+            var graphics = Sane(igpu, 200);
+            if (!double.IsNaN(package) && !double.IsNaN(graphics) && graphics > package) graphics = package;
+
+            return new HardwareReading(package, graphics, Sane(gpu, 400));
         }
     }
 
@@ -236,6 +296,14 @@ internal sealed class HardwareReader : IDisposable
         // uncore, which is exactly the boundary we want.
         return FindPower(hardware, "cpu package", "package");
     }
+
+    /// <summary>
+    /// The RAPL graphics domain, PP1 on Intel. This is the same counter that
+    /// Afterburner and HWiNFO show as integrated-GPU power, and it is a subset
+    /// of the package figure above, never an addition to it.
+    /// </summary>
+    private static double? FindIGpuPower(IHardware hardware) =>
+        FindPower(hardware, "cpu graphics", "graphics", "igpu");
 
     private static double? FindGpuPower(IHardware hardware)
     {

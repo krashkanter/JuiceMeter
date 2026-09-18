@@ -42,8 +42,22 @@ public sealed class PowerSample
     /// <summary>What the socket is delivering, in watts. Zero while on battery.</summary>
     public double WallWatts { get; init; }
 
+    /// <summary>CPU package power: cores, cache, uncore and the integrated GPU.</summary>
     public double CpuWatts { get; init; }
+
+    /// <summary>Discrete GPU board power. Zero when the card is switched off.</summary>
     public double GpuWatts { get; init; }
+
+    /// <summary>
+    /// Integrated GPU watts, from the RAPL graphics domain -- the same figure
+    /// Afterburner lists as a second GPU. It is already counted inside
+    /// <see cref="CpuWatts"/>, so it is only ever used to split that bar up;
+    /// adding the two together would bill this draw twice.
+    /// </summary>
+    public double IGpuWatts { get; init; }
+
+    /// <summary>CPU package with the integrated graphics slice carved back out.</summary>
+    public double CpuCoreWatts => Math.Max(0, CpuWatts - IGpuWatts);
 
     /// <summary>Everything that is not CPU or GPU: panel, board, RAM, SSD, fans, wifi.</summary>
     public double BaselineWatts { get; init; }
@@ -65,6 +79,9 @@ public sealed class PowerSample
     public bool CpuSensorLive { get; init; }
 
     public bool GpuSensorLive { get; init; }
+
+    /// <summary>The graphics domain was readable, so the iGPU slice is real rather than zero.</summary>
+    public bool IGpuSensorLive { get; init; }
 
     public bool OnAc => Source is PowerSource.AcIdle or PowerSource.AcCharging;
 

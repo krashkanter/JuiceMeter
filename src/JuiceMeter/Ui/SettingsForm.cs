@@ -34,6 +34,9 @@ internal sealed class SettingsForm : Form
         _settings = settings;
         _monitor = monitor;
 
+        AutoScaleDimensions = new SizeF(96f, 96f);
+        AutoScaleMode = AutoScaleMode.Dpi;
+
         Text = "Juice Meter settings";
         BackColor = Theme.Bg;
         ForeColor = Theme.Text;

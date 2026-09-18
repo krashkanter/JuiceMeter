@@ -87,7 +87,8 @@ Juice Meter runs unelevated and is useful that way — battery-side measurement 
 completely unaffected. But:
 
 - **CPU package power (RAPL)** requires a kernel driver, and therefore admin.
-- **GPU power (NVML)** generally works without it.
+- **Integrated GPU power (RAPL, graphics domain)** needs the same driver.
+- **Discrete GPU power (NVML)** generally works without it.
 
 Without CPU package power, **calibration is deliberately switched off**. The
 leftover after subtracting GPU would still be mostly CPU, which swings by tens
@@ -103,6 +104,29 @@ no UAC prompt.
 > The CPU sensor path uses LibreHardwareMonitor, which loads a signed ring-0
 > driver to read MSRs. Some anti-cheat software objects to this. Turn the
 > sensors off in Settings if that is a problem; you keep full battery accuracy.
+
+### Two GPUs
+
+This laptop has two, and both report power: the discrete RTX 4050 over NVML, and
+the integrated Iris Xe as the RAPL *graphics* domain. That is the same pair
+Afterburner lists as GPU 0 and GPU 1, and Juice Meter shows both — the breakdown
+bar gets a separate **iGPU** segment, and the details panel gives its wattage.
+
+The catch is that they are not the same kind of number. The integrated GPU sits
+on the CPU die, and Intel reports it as PP1, which the package domain *already
+contains*. So:
+
+```
+system = CPU package + dGPU + baseline        <- the total
+CPU package = CPU cores and uncore + iGPU     <- what the bar splits open
+```
+
+Adding the integrated figure to the package would bill that draw twice. Juice
+Meter therefore only ever totals **package + discrete**, and uses the integrated
+reading to carve the CPU bar into two segments. The split only appears when
+running elevated, because the graphics domain needs the same driver the package
+domain does; without it the bar falls back to a single CPU segment, which is
+still correct, just less detailed.
 
 ### Switching GPU modes
 
@@ -169,17 +193,20 @@ Battery
   design      : 90.0 Wh
 
 Hardware sensors
-  status      : CPU unavailable, GPU ok
-  cpu         : 12th Gen Intel Core i7-12700H (power no)
+  status      : CPU ok, GPU ok
+  cpu         : 12th Gen Intel Core i7-12700H (power yes)
   gpu         : NVIDIA GeForce RTX 4050 Laptop GPU (power yes)
   dgpu devnode: PCI\VEN_10DE&DEV_28A1&SUBSYS_1D931043&REV_A1\4&1a2b3c4d&0&0008
   dgpu running: True
 
-time      source       batt_W    cpu_W    gpu_W   base_W  system_W    wall_W
---------  -----------  -------  -------  -------  -------  --------  --------
-00:34:24  battery       -19.46        -     1.20    18.26     19.46      0.00
-00:34:27  battery       -25.31        -     1.20    24.11     25.31      0.00
+time      source       batt_W    cpu_W   igpu_W    gpu_W   base_W  system_W    wall_W
+--------  -----------  -------  -------  -------  -------  -------  --------  --------
+00:34:24  battery       -19.46     8.31     2.14     1.20    18.26     19.46      0.00
+00:34:27  battery       -25.31    12.04     2.31     1.20    24.11     25.31      0.00
 ```
+
+`igpu_W` is part of `cpu_W`, so the total is `cpu_W + gpu_W + base_W`. A dash in
+either CPU column means the sensor needs administrator rights.
 
 ---
 
@@ -200,10 +227,15 @@ The history CSV is the source of truth and is deliberately plain text, because
 the whole point of this app is a number you can check:
 
 ```csv
-local_time,unix_seconds,seconds,source,confidence,wall_wh,system_wh,batt_out_wh,batt_in_wh,avg_system_w,avg_wall_w,avg_cpu_w,avg_gpu_w,avg_base_w,batt_pct
-2026-09-18 00:34,1789585440,60.0,Battery,Measured,0,0.394521,0.394521,0,23.67,0,0,1.2,22.47,86.4
-2026-09-18 00:35,1789585500,60.0,AcCharging,Modelled,1.842357,0.512833,0,1.10412,30.77,110.54,8.31,1.2,21.26,87.1
+local_time,unix_seconds,seconds,source,confidence,wall_wh,system_wh,batt_out_wh,batt_in_wh,avg_system_w,avg_wall_w,avg_cpu_w,avg_igpu_w,avg_gpu_w,avg_base_w,batt_pct
+2026-09-18 00:34,1789585440,60.0,Battery,Measured,0,0.394521,0.394521,0,23.67,0,0,0,1.2,22.47,86.4
+2026-09-18 00:35,1789585500,60.0,AcCharging,Modelled,1.842357,0.512833,0,1.10412,30.77,110.54,8.31,2.14,1.2,21.26,87.1
 ```
+
+`avg_igpu_w` is a **slice of** `avg_cpu_w`, not an addition to it — see
+[Two GPUs](#two-gpus). The system total is `avg_cpu_w + avg_gpu_w + avg_base_w`.
+Files written before that column existed are upgraded in place on first write, so
+a month never ends up holding rows of two different widths.
 
 Sleep and hibernate are recorded as **gaps**, not integrated across. If the
 sampler is starved or the lid is shut, those seconds are counted as skipped

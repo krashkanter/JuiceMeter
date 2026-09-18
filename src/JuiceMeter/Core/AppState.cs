@@ -45,6 +45,17 @@ public sealed class AppState
                 if (loaded is not null)
                 {
                     loaded.Calibration ??= new CalibrationModel();
+
+                    // Before the lifetime totals are touched: a baseline learned
+                    // by an older model is worse than no baseline at all, because
+                    // it looks calibrated while quietly overstating every AC watt.
+                    var discarded = loaded.Calibration.DiscardIfStale();
+                    if (discarded > 0)
+                    {
+                        Log.Info($"Discarded {discarded:N0} calibration samples from an older model; " +
+                                 "the baseline will relearn on battery");
+                    }
+
                     loaded.Calibration.Rehydrate();
                     return loaded;
                 }
@@ -57,6 +68,7 @@ public sealed class AppState
         }
 
         var fresh = new AppState();
+        fresh.Calibration.DiscardIfStale();
         fresh.Calibration.Rehydrate();
         return fresh;
     }

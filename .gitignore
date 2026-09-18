@@ -34,3 +34,11 @@ desktop.ini
 data/
 portable.txt
 probe.txt
+
+# Working notes and assistant scratch. Useful locally, noise in the history.
+HANDOFF.md
+CLAUDE.md
+.claude/
+.claude-*/
+*.local.md
+scratch/

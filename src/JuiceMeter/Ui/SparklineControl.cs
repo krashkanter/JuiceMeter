@@ -70,12 +70,13 @@ internal sealed class SparklineControl : Control
 
         Theme.FillCard(g, new RectangleF(0, 0, Width - 1, Height - 1));
 
-        var plot = new RectangleF(46, 36, Width - 62, Height - 76);
+        var s = Theme.Scale(g);
+        var plot = new RectangleF(46 * s, 36 * s, Width - 62 * s, Height - 76 * s);
         if (plot.Width <= 10 || plot.Height <= 10) return;
 
         using (var captionBrush = new SolidBrush(Theme.TextDim))
         {
-            g.DrawString(Caption, Theme.SmallBold, captionBrush, 14, 12);
+            g.DrawString(Caption, Theme.SmallBold, captionBrush, 14 * s, 12 * s);
         }
 
         var data = _points.ToArray();
@@ -83,7 +84,7 @@ internal sealed class SparklineControl : Control
         {
             using var hint = new SolidBrush(Theme.TextFaint);
             g.DrawString("Collecting samples...", Theme.Small, hint,
-                plot.X + plot.Width / 2 - 52, plot.Y + plot.Height / 2 - 8);
+                plot.X + plot.Width / 2 - 52 * s, plot.Y + plot.Height / 2 - 8 * s);
             return;
         }
 
@@ -91,7 +92,7 @@ internal sealed class SparklineControl : Control
         foreach (var p in data) peak = Math.Max(peak, Math.Max(p.System, p.Wall));
 
         var ceiling = NiceCeiling(peak);
-        DrawGrid(g, plot, ceiling);
+        DrawGrid(g, plot, ceiling, s);
 
         var step = plot.Width / (data.Length - 1);
 
@@ -129,7 +130,7 @@ internal sealed class SparklineControl : Control
         DrawLegend(g, plot, data[^1]);
     }
 
-    private static void DrawGrid(Graphics g, RectangleF plot, float ceiling)
+    private static void DrawGrid(Graphics g, RectangleF plot, float ceiling, float s)
     {
         using var pen = new Pen(Theme.Grid);
         using var text = new SolidBrush(Theme.TextFaint);
@@ -142,13 +143,13 @@ internal sealed class SparklineControl : Control
             g.DrawLine(pen, plot.X, y, plot.Right, y);
 
             var label = (ceiling / 4f * i).ToString("F0");
-            g.DrawString(label, Theme.Small, text, new RectangleF(0, y - 7, plot.X - 8, 16), right);
+            g.DrawString(label, Theme.Small, text, new RectangleF(0, y - 7 * s, plot.X - 8 * s, 16 * s), right);
         }
     }
 
     private void DrawLegend(Graphics g, RectangleF plot, Point3 latest)
     {
-        var y = plot.Bottom + 8;
+        var y = plot.Bottom + 8 * Theme.Scale(g);
         var x = plot.X;
 
         x = LegendItem(g, x, y, Theme.Accent, $"System {latest.System:F1} W", false);
@@ -157,15 +158,17 @@ internal sealed class SparklineControl : Control
 
     private static float LegendItem(Graphics g, float x, float y, Color colour, string label, bool dashed)
     {
-        using (var pen = new Pen(colour, 2f) { DashStyle = dashed ? DashStyle.Dash : DashStyle.Solid })
+        var s = Theme.Scale(g);
+
+        using (var pen = new Pen(colour, 2f * s) { DashStyle = dashed ? DashStyle.Dash : DashStyle.Solid })
         {
-            g.DrawLine(pen, x, y + 7, x + 14, y + 7);
+            g.DrawLine(pen, x, y + 7 * s, x + 14 * s, y + 7 * s);
         }
 
         using var brush = new SolidBrush(Theme.TextDim);
-        g.DrawString(label, Theme.Small, brush, x + 17, y);
+        g.DrawString(label, Theme.Small, brush, x + 17 * s, y);
 
-        return x + 17 + g.MeasureString(label, Theme.Small).Width + 16;
+        return x + 17 * s + g.MeasureString(label, Theme.Small).Width + 16 * s;
     }
 
     private static float NiceCeiling(float peak)

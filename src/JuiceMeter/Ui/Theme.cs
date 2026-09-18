@@ -26,6 +26,10 @@ internal static class Theme
     public static Color OnAccent { get; private set; }
 
     public static Color Cpu { get; private set; }
+
+    /// <summary>Integrated graphics: a slice of the CPU package, so a colour next to it.</summary>
+    public static Color IGpu { get; private set; }
+
     public static Color Gpu { get; private set; }
     public static Color Rest { get; private set; }
 
@@ -115,6 +119,7 @@ internal static class Theme
             OnAccent = Color.White;
 
             Cpu = Color.FromArgb(0, 103, 192);
+            IGpu = Color.FromArgb(0, 140, 152);
             Gpu = Color.FromArgb(16, 137, 62);
             Rest = Color.FromArgb(122, 106, 190);
 
@@ -138,6 +143,7 @@ internal static class Theme
             OnAccent = Color.FromArgb(28, 22, 8);
 
             Cpu = Color.FromArgb(96, 165, 250);
+            IGpu = Color.FromArgb(56, 195, 205);
             Gpu = Color.FromArgb(110, 206, 126);
             Rest = Color.FromArgb(167, 148, 240);
 
@@ -169,12 +175,20 @@ internal static class Theme
         return path;
     }
 
+    /// <summary>
+    /// Device pixels per layout unit. Fonts are in points so GDI+ already scales
+    /// them with the monitor, but hand-drawn coordinates do not scale by
+    /// themselves: every literal offset in a custom-painted control has to be
+    /// multiplied by this or the layout falls apart above 100%.
+    /// </summary>
+    public static float Scale(Graphics g) => g.DpiY / 96f;
+
     /// <summary>Flat panel with a hairline border. The only surface treatment used.</summary>
     public static void FillCard(Graphics g, RectangleF bounds, Color? fill = null)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
-        using var path = RoundedRect(bounds, Radius);
+        using var path = RoundedRect(bounds, Radius * Scale(g));
         using var brush = new SolidBrush(fill ?? Card);
         using var pen = new Pen(Border);
 
@@ -187,23 +201,24 @@ internal static class Theme
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
-        var size = g.MeasureString(text, SmallBold);
-        var bounds = new RectangleF(location.X, location.Y, size.Width + 16f, size.Height + 6f);
+        var s = Scale(g);
+        var bounds = new RectangleF(location, ChipSize(g, text));
 
-        using var path = RoundedRect(bounds, 4f);
+        using var path = RoundedRect(bounds, 4f * s);
         using var fill = new SolidBrush(Color.FromArgb(IsLight ? 28 : 46, colour));
         using var pen = new Pen(Color.FromArgb(IsLight ? 90 : 120, colour));
         using var textBrush = new SolidBrush(colour);
 
         g.FillPath(fill, path);
         g.DrawPath(pen, path);
-        g.DrawString(text, SmallBold, textBrush, bounds.X + 8f, bounds.Y + 3f);
+        g.DrawString(text, SmallBold, textBrush, bounds.X + 8f * s, bounds.Y + 3f * s);
     }
 
     public static SizeF ChipSize(Graphics g, string text)
     {
+        var s = Scale(g);
         var size = g.MeasureString(text, SmallBold);
-        return new SizeF(size.Width + 16f, size.Height + 6f);
+        return new SizeF(size.Width + 16f * s, size.Height + 6f * s);
     }
 
     public static Color ForSource(Core.PowerSource source) => source switch
