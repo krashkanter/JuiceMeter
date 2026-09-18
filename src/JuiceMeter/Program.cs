@@ -172,6 +172,10 @@ internal static class Probe
                           + (dgpuRunning ? string.Empty : "   <- NVML will not be called"));
         Console.WriteLine();
 
+        Console.WriteLine("Sensors exposed");
+        foreach (var line in hardware.DescribeSensors()) Console.WriteLine(line);
+        Console.WriteLine();
+
         var brightness = BrightnessReader.TryRead();
         Console.WriteLine($"Panel brightness: {(brightness >= 0 ? brightness + "%" : "not reported")}");
         Console.WriteLine();

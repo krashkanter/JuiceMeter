@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Principal;
 using JuiceMeter.Core;
 using LibreHardwareMonitor.Hardware;
@@ -51,10 +52,33 @@ internal readonly record struct HardwareReading(
 /// </summary>
 internal sealed class HardwareReader : IDisposable
 {
+    /// <summary>
+    /// Below this, the RAPL graphics domain is treated as unpopulated rather
+    /// than as a real zero. Alder Lake-H exposes PP1 but never fills it in: it
+    /// reads about 0.01 W while the integrated GPU is demonstrably busy, and a
+    /// bar segment pinned at 0.0 W would claim the iGPU costs nothing.
+    /// </summary>
+    private const double IGpuFloorWatts = 0.25;
+
+    /// <summary>
+    /// How long a discrete GPU reading stays usable after NVML stops answering.
+    /// Under Optimus the card drops to a low-power state and its power sensor
+    /// goes null for a second or two at a time; without this the GPU term would
+    /// blink out of the total and the wattage would jitter.
+    /// </summary>
+    private const double GpuHoldSeconds = 5;
+
     private readonly DiscreteGpu _dgpu = new();
     private readonly object _gate = new();
 
     private Computer? _computer;
+
+    /// <summary>Highest graphics-domain reading seen, to tell a real sensor from a stub.</summary>
+    private double _igpuPeakWatts;
+
+    private double _lastGpuWatts;
+    private DateTime _lastGpuAt = DateTime.MinValue;
+    private bool _gpuEverRead;
 
     /// <summary>LibreHardwareMonitor currently holds a live NVIDIA node we may poll.</summary>
     private bool _nvidiaInComputer;
@@ -283,7 +307,83 @@ internal sealed class HardwareReader : IDisposable
             var graphics = Sane(igpu, 200);
             if (!double.IsNaN(package) && !double.IsNaN(graphics) && graphics > package) graphics = package;
 
-            return new HardwareReading(package, graphics, Sane(gpu, 400));
+            if (!double.IsNaN(graphics))
+            {
+                _igpuPeakWatts = Math.Max(_igpuPeakWatts, graphics);
+
+                // Present but never populated: report nothing rather than a zero
+                // that looks like a measurement. The draw is still counted -- it
+                // is inside the package figure either way, just not broken out.
+                if (_igpuPeakWatts < IGpuFloorWatts) graphics = double.NaN;
+            }
+
+            IGpuPowerAvailable = !double.IsNaN(graphics);
+
+            return new HardwareReading(package, graphics, HoldGpu(Sane(gpu, 400)));
+        }
+    }
+
+    /// <summary>
+    /// Smooths over NVML going quiet while the card naps. A reading we have had
+    /// before is reused for a moment; past that the card really has parked
+    /// itself and zero is closer to the truth than "unknown", which would dump
+    /// the difference into the baseline instead.
+    /// </summary>
+    private double HoldGpu(double watts)
+    {
+        if (!double.IsNaN(watts))
+        {
+            _lastGpuWatts = watts;
+            _lastGpuAt = DateTime.UtcNow;
+            _gpuEverRead = true;
+            return watts;
+        }
+
+        // Never read at all: the sensor is genuinely absent, so say so.
+        if (!_gpuEverRead || GpuSwitchedOff) return watts;
+
+        return (DateTime.UtcNow - _lastGpuAt).TotalSeconds <= GpuHoldSeconds ? _lastGpuWatts : 0;
+    }
+
+    /// <summary>
+    /// Every sensor each live device exposes, for the probe. Purely diagnostic:
+    /// when a reading comes back empty this is the only way to tell "the sensor
+    /// is missing" from "the sensor is there and reporting nothing".
+    /// </summary>
+    public IEnumerable<string> DescribeSensors()
+    {
+        lock (_gate)
+        {
+            if (_computer is null)
+            {
+                yield return "  (sensors not open)";
+                yield break;
+            }
+
+            foreach (var hardware in _computer.Hardware)
+            {
+                // Same rule as the read loop: a parked NVIDIA node is never touched.
+                var parked = hardware.HardwareType == HardwareType.GpuNvidia && !_nvidiaInComputer;
+
+                yield return $"  {hardware.HardwareType}: {hardware.Name}{(parked ? "   <- parked, not read" : string.Empty)}";
+                if (parked) continue;
+
+                var any = false;
+
+                foreach (var sensor in hardware.Sensors)
+                {
+                    if (sensor.SensorType is not (SensorType.Power or SensorType.Load or SensorType.Clock)) continue;
+
+                    any = true;
+                    var value = sensor.Value is { } v && double.IsFinite(v)
+                        ? v.ToString("F2", CultureInfo.InvariantCulture)
+                        : "null";
+
+                    yield return $"      {sensor.SensorType,-6} {sensor.Name,-28} {value,10}";
+                }
+
+                if (!any) yield return "      (no power, load or clock sensors)";
+            }
         }
     }
 
@@ -352,6 +452,13 @@ internal sealed class HardwareReader : IDisposable
             Available = false;
             GpuPowerAvailable = false;
             CpuPowerAvailable = false;
+
+            // A held reading must not survive the sensor stack it came from;
+            // after a mode switch it would describe a card that is no longer
+            // in the same state. The iGPU peak is CPU-side and does survive.
+            _gpuEverRead = false;
+            _lastGpuAt = DateTime.MinValue;
+            _lastGpuWatts = 0;
         }
     }
 

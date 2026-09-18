@@ -123,10 +123,18 @@ CPU package = CPU cores and uncore + iGPU     <- what the bar splits open
 
 Adding the integrated figure to the package would bill that draw twice. Juice
 Meter therefore only ever totals **package + discrete**, and uses the integrated
-reading to carve the CPU bar into two segments. The split only appears when
-running elevated, because the graphics domain needs the same driver the package
-domain does; without it the bar falls back to a single CPU segment, which is
-still correct, just less detailed.
+reading to carve the CPU bar into two segments.
+
+The split needs administrator rights, because the graphics domain uses the same
+driver the package domain does. It also needs the domain to actually work: some
+parts expose PP1 and then never fill it in. The i7-12700H is one of them — it
+reports about 0.01 W while the Iris Xe is visibly busy. Rather than draw a
+segment pinned at 0.0 W and imply the integrated GPU is free, Juice Meter treats
+a domain that never rises above 0.25 W as unpopulated and falls back to a single
+CPU segment. Nothing is lost from the total either way: that draw is inside the
+package figure regardless, it just is not broken out.
+
+`--probe` shows the raw column, so you can see which case your machine is in.
 
 ### Switching GPU modes
 
@@ -205,8 +213,11 @@ time      source       batt_W    cpu_W   igpu_W    gpu_W   base_W  system_W    w
 00:34:27  battery       -25.31    12.04     2.31     1.20    24.11     25.31      0.00
 ```
 
-`igpu_W` is part of `cpu_W`, so the total is `cpu_W + gpu_W + base_W`. A dash in
-either CPU column means the sensor needs administrator rights.
+`igpu_W` is part of `cpu_W`, so the total is `cpu_W + gpu_W + base_W`. A dash
+means no usable reading: for `cpu_W` that is almost always missing administrator
+rights, and for `igpu_W` it can also mean the chip exposes the graphics domain
+without ever populating it. `--probe` prints every sensor it found above the
+table, which distinguishes "absent" from "present and reporting nothing".
 
 ---
 
