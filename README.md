@@ -86,6 +86,9 @@ machine.
 .NET 8 + WinForms · [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
 for CPU/GPU · Win32 `DeviceIoControl` for the battery
 
+Building it yourself needs the .NET 8 SDK: clone, then `.\build.ps1`
+(`-SelfContained` to bundle the runtime). Output lands in `dist\`.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
