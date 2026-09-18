@@ -450,7 +450,7 @@ internal sealed class MainForm : Form
     {
         var answer = MessageBox.Show(this,
             "Zero every counter and start fresh?\n\n" +
-            "Your existing history is not deleted — it is moved into an archive folder " +
+            "Your existing history is not deleted. It is moved into an archive folder " +
             "next to the data, so you can still get at it.",
             "Reset counters",
             MessageBoxButtons.OKCancel,

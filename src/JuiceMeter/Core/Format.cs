@@ -27,5 +27,5 @@ internal static class Format
     public static string Money(double units, Settings settings) =>
         settings.TariffPerUnit > 0
             ? $"{settings.CurrencySymbol}{(units * settings.TariffPerUnit).ToString("F2", CultureInfo.CurrentCulture)}"
-            : "—";
+            : "-";
 }
