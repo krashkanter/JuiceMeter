@@ -19,9 +19,11 @@ internal sealed class MainForm : Form
     private readonly StatCard _lifetime = new();
     private readonly StatCard _battery = new();
     private readonly Label _status = new();
+    private readonly CheckBox _runOnStartup = new();
     private readonly Panel _banner = new();
 
     private DateTime _nextTotalsRefresh = DateTime.MinValue;
+    private bool _suppressStartupEvent;
 
     public bool ExitRequested { get; set; }
 
@@ -29,15 +31,15 @@ internal sealed class MainForm : Form
     {
         _monitor = monitor;
         _settings = settings;
-        _header = new HeaderPanel(settings);
+        _header = new HeaderPanel();
         _side = new SidePanel(monitor, settings);
 
         Text = "Juice Meter";
         BackColor = Theme.Bg;
         ForeColor = Theme.Text;
         Font = Theme.Body;
-        ClientSize = new Size(1000, 700);
-        MinimumSize = new Size(880, 620);
+        ClientSize = new Size(1000, 752);
+        MinimumSize = new Size(900, 700);
         StartPosition = FormStartPosition.CenterScreen;
         DoubleBuffered = true;
 
@@ -45,6 +47,8 @@ internal sealed class MainForm : Form
         BuildLayout();
 
         _monitor.Sampled += OnSampled;
+        Theme.Changed += OnThemeChanged;
+
         RefreshTotals();
     }
 
@@ -64,51 +68,52 @@ internal sealed class MainForm : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        Native.UseDarkTitleBar(Handle);
+        Native.SetTitleBarTheme(Handle, !Theme.IsLight);
+    }
+
+    protected override void OnVisibleChanged(EventArgs e)
+    {
+        base.OnVisibleChanged(e);
+        if (Visible) SyncStartupCheckbox();
     }
 
     private void BuildLayout()
     {
-        // Body: chart on the left, day list on the right.
-        var chartArea = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg, Padding = new Padding(0) };
+        var chartArea = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };
         _breakdown.Dock = DockStyle.Bottom;
-        _breakdown.Height = 118;
+        _breakdown.Height = 120;
         _spark.Dock = DockStyle.Fill;
         _spark.Caption = "Power draw, last 15 minutes";
-        _spark.Capacity = Math.Max(120, (int)(TimeSpan.FromMinutes(15).TotalMilliseconds / _settings.SampleIntervalMs));
+        _spark.Capacity = SparkCapacity();
 
         chartArea.Controls.Add(_spark);
-        chartArea.Controls.Add(Spacer(DockStyle.Bottom, 10));
+        chartArea.Controls.Add(Spacer(DockStyle.Bottom, 12));
         chartArea.Controls.Add(_breakdown);
 
         _side.Dock = DockStyle.Right;
         _side.Width = 320;
 
-        var body = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg, Padding = new Padding(14, 0, 14, 0) };
+        var body = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg, Padding = new Padding(16, 0, 16, 0) };
         body.Controls.Add(chartArea);
-        body.Controls.Add(Spacer(DockStyle.Right, 10));
+        body.Controls.Add(Spacer(DockStyle.Right, 12));
         body.Controls.Add(_side);
 
-        // Stat cards.
         var cards = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 108,
+            Height = 106,
             ColumnCount = 4,
             RowCount = 1,
             BackColor = Theme.Bg,
-            Padding = new Padding(14, 0, 14, 12),
+            Padding = new Padding(16, 0, 16, 12),
         };
 
-        for (var i = 0; i < 4; i++)
-        {
-            cards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25f));
-        }
+        for (var i = 0; i < 4; i++) cards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25f));
 
         foreach (var card in new[] { _today, _month, _lifetime, _battery })
         {
             card.Dock = DockStyle.Fill;
-            card.Margin = new Padding(0, 0, 10, 0);
+            card.Margin = new Padding(0, 0, 12, 0);
         }
 
         _battery.Margin = new Padding(0);
@@ -117,30 +122,7 @@ internal sealed class MainForm : Form
         _header.Dock = DockStyle.Top;
         _header.Height = 104;
 
-        // Footer.
-        var footer = new Panel { Dock = DockStyle.Bottom, Height = 58, BackColor = Theme.Bg, Padding = new Padding(14, 10, 14, 12) };
-
-        var hide = MakeButton("Hide to tray", (_, _) => Hide());
-        var reset = MakeButton("Reset counters", OnReset);
-        var folder = MakeButton("Open data folder", (_, _) => OpenDataFolder());
-        var settings = MakeButton("Settings", OnSettings, primary: true);
-
-        _status.AutoSize = false;
-        _status.Dock = DockStyle.Fill;
-        _status.ForeColor = Theme.TextFaint;
-        _status.Font = Theme.Small;
-        _status.TextAlign = ContentAlignment.MiddleLeft;
-        _status.Padding = new Padding(2, 0, 0, 0);
-
-        footer.Controls.Add(_status);
-        foreach (var button in new[] { hide, reset, folder, settings })
-        {
-            button.Dock = DockStyle.Right;
-            button.Margin = new Padding(8, 0, 0, 0);
-            footer.Controls.Add(button);
-            footer.Controls.Add(Spacer(DockStyle.Right, 8));
-        }
-
+        BuildFooter(out var footer);
         BuildBanner();
 
         Controls.Add(body);
@@ -150,12 +132,83 @@ internal sealed class MainForm : Form
         Controls.Add(_banner);
     }
 
+    private int SparkCapacity() =>
+        Math.Max(120, (int)(TimeSpan.FromMinutes(15).TotalMilliseconds / _settings.SampleIntervalMs));
+
+    private void BuildFooter(out Panel footer)
+    {
+        footer = new Panel
+        {
+            Dock = DockStyle.Bottom,
+            Height = 60,
+            BackColor = Theme.Bg,
+            Padding = new Padding(16, 12, 16, 14),
+        };
+
+        _runOnStartup.Text = "Run on startup";
+        _runOnStartup.AutoSize = true;
+        _runOnStartup.Dock = DockStyle.Left;
+        _runOnStartup.ForeColor = Theme.Text;
+        _runOnStartup.BackColor = Color.Transparent;
+        _runOnStartup.Padding = new Padding(0, 7, 0, 0);
+        _runOnStartup.CheckedChanged += OnRunOnStartupChanged;
+        SyncStartupCheckbox();
+
+        _status.AutoSize = false;
+        _status.Dock = DockStyle.Fill;
+        _status.ForeColor = Theme.TextFaint;
+        _status.Font = Theme.Small;
+        _status.TextAlign = ContentAlignment.MiddleLeft;
+        _status.Padding = new Padding(18, 0, 0, 0);
+
+        footer.Controls.Add(_status);
+        footer.Controls.Add(_runOnStartup);
+
+        foreach (var button in new[]
+                 {
+                     MakeButton("Settings", OnSettings, primary: true),
+                     MakeButton("Open data folder", (_, _) => OpenDataFolder()),
+                     MakeButton("Reset counters", OnReset),
+                     MakeButton("Hide to tray", (_, _) => Hide()),
+                 })
+        {
+            button.Dock = DockStyle.Right;
+            footer.Controls.Add(button);
+            footer.Controls.Add(Spacer(DockStyle.Right, 8));
+        }
+    }
+
+    private void SyncStartupCheckbox()
+    {
+        _suppressStartupEvent = true;
+        _runOnStartup.Checked = Startup.IsEnabled;
+        _suppressStartupEvent = false;
+    }
+
+    private void OnRunOnStartupChanged(object? sender, EventArgs e)
+    {
+        if (_suppressStartupEvent) return;
+
+        if (!Startup.SetEnabled(_runOnStartup.Checked))
+        {
+            MessageBox.Show(this,
+                "Could not change the run-at-login setting. See juicemeter.log for details.",
+                "Juice Meter", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+
+            SyncStartupCheckbox();
+            return;
+        }
+
+        _settings.AutoStart = Startup.IsEnabled;
+        _settings.Save();
+    }
+
     private void BuildBanner()
     {
         _banner.Dock = DockStyle.Top;
         _banner.Height = 0;
-        _banner.BackColor = Color.FromArgb(48, 38, 18);
-        _banner.Padding = new Padding(16, 0, 10, 0);
+        _banner.BackColor = Theme.IsLight ? Color.FromArgb(255, 244, 222) : Color.FromArgb(56, 44, 22);
+        _banner.Padding = new Padding(18, 6, 12, 6);
         _banner.Visible = false;
 
         // CPU package power is the one that matters: without it the baseline
@@ -167,6 +220,7 @@ internal sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ForeColor = Theme.Accent,
             Font = Theme.Small,
+            Tag = "accent",
             TextAlign = ContentAlignment.MiddleLeft,
             Text = Sensors.HardwareReader.IsElevated
                 ? $"CPU package power unavailable: {_monitor.HardwareStatus}. Battery readings are unaffected, but AC figures stay estimates."
@@ -176,16 +230,12 @@ internal sealed class MainForm : Form
         var action = new Button
         {
             Dock = DockStyle.Right,
-            Width = 150,
+            Width = 152,
             Text = Sensors.HardwareReader.IsElevated ? "Dismiss" : "Restart as admin",
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(70, 56, 24),
-            ForeColor = Theme.Accent,
-            Font = Theme.SmallBold,
-            Margin = new Padding(0),
         };
 
-        action.FlatAppearance.BorderColor = Theme.AccentDim;
+        Theme.StyleButton(action);
+        action.Font = Theme.SmallBold;
 
         action.Click += (_, _) =>
         {
@@ -202,7 +252,7 @@ internal sealed class MainForm : Form
 
         _banner.Controls.Add(message);
         _banner.Controls.Add(action);
-        _banner.Height = 38;
+        _banner.Height = 40;
         _banner.Visible = true;
     }
 
@@ -244,23 +294,41 @@ internal sealed class MainForm : Form
         {
             Text = text,
             AutoSize = false,
-            Width = TextRenderer.MeasureText(text, Theme.Body).Width + 34,
+            Width = TextRenderer.MeasureText(text, Theme.Body).Width + 32,
             Height = 34,
-            FlatStyle = FlatStyle.Flat,
-            BackColor = primary ? Theme.AccentDim : Theme.Panel,
-            ForeColor = primary ? Color.White : Theme.Text,
-            Font = Theme.Body,
-            Cursor = Cursors.Hand,
         };
 
-        button.FlatAppearance.BorderColor = primary ? Theme.Accent : Theme.Border;
-        button.FlatAppearance.MouseOverBackColor = primary ? Theme.Accent : Theme.PanelHi;
+        Theme.StyleButton(button, primary);
         button.Click += onClick;
 
         return button;
     }
 
     // --------------------------------------------------------------- updates
+
+    private void OnThemeChanged()
+    {
+        if (!IsHandleCreated || IsDisposed) return;
+
+        try
+        {
+            BeginInvoke(() =>
+            {
+                if (IsDisposed) return;
+
+                BackColor = Theme.Bg;
+                ForeColor = Theme.Text;
+                _banner.BackColor = Theme.IsLight ? Color.FromArgb(255, 244, 222) : Color.FromArgb(56, 44, 22);
+                _status.ForeColor = Theme.TextFaint;
+
+                Theme.ApplyTo(this);
+                Native.SetTitleBarTheme(Handle, !Theme.IsLight);
+                Invalidate(true);
+            });
+        }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
+    }
 
     private void OnSampled(PowerSample sample)
     {
@@ -275,7 +343,7 @@ internal sealed class MainForm : Form
                 _header.Update(sample, _monitor);
                 _spark.Push(sample.SystemWatts, sample.WallWatts, sample.OnAc);
                 _breakdown.Update(sample.CpuWatts, sample.GpuWatts, sample.BaselineWatts,
-                    sample.CpuSensorLive, sample.GpuSensorLive);
+                    sample.CpuSensorLive, sample.GpuSensorLive, _monitor.GpuSwitchedOff);
 
                 if (DateTime.UtcNow >= _nextTotalsRefresh)
                 {
@@ -302,18 +370,15 @@ internal sealed class MainForm : Form
 
         _today.Set("TODAY",
             Format.Units(today.WallUnits),
-            $"{Money(today.WallUnits)}  ·  avg {today.AverageWallWatts:F0} W",
-            Theme.Accent);
+            $"{Money(today.WallUnits)}   avg {today.AverageWallWatts:F0} W");
 
         _month.Set(DateTime.Today.ToString("MMMM", CultureInfo.CurrentCulture).ToUpperInvariant(),
             Format.Units(month.WallUnits),
-            $"{Money(month.WallUnits)}  ·  {Format.Hours(month.Seconds)} metered",
-            Theme.Cpu);
+            $"{Money(month.WallUnits)}   {Format.Hours(month.Seconds)} metered");
 
         _lifetime.Set("LIFETIME",
             Format.Units(_monitor.LifetimeWallUnits),
-            $"{Money(_monitor.LifetimeWallUnits)}  ·  since {_monitor.State.FirstRunUtc.ToLocalTime():d MMM yyyy}",
-            Theme.Gpu);
+            $"{Money(_monitor.LifetimeWallUnits)}   since {_monitor.State.FirstRunUtc.ToLocalTime():d MMM yyyy}");
 
         if (sample.BatteryPresent)
         {
@@ -321,21 +386,19 @@ internal sealed class MainForm : Form
             _battery.Set("BATTERY",
                 $"{sample.BatteryPercent:F0}%",
                 double.IsFinite(health) && health > 0
-                    ? $"{sample.RemainingWh:F1} / {sample.FullChargeWh:F1} Wh  ·  {health:F0}% health"
-                    : $"{sample.RemainingWh:F1} Wh",
-                Theme.ForSource(sample.Source));
+                    ? $"{sample.RemainingWh:F1} / {sample.FullChargeWh:F1} Wh   {health:F0}% health"
+                    : $"{sample.RemainingWh:F1} Wh");
         }
         else
         {
-            _battery.Set("BATTERY", "None", "No system battery detected", Theme.TextFaint);
+            _battery.Set("BATTERY", "None", "No system battery detected");
         }
 
         _side.Refresh();
 
         var gap = _monitor.State.LifetimeGapSeconds;
         _status.Text = $"Metered {Format.Hours(_monitor.State.LifetimeSeconds)}"
-                       + (gap > 60 ? $"  ·  {Format.Hours(gap)} skipped while asleep" : string.Empty)
-                       + $"  ·  data in {Paths.DataDir}";
+                       + (gap > 60 ? $"   {Format.Hours(gap)} skipped while asleep" : string.Empty);
     }
 
     private string Money(double units) => Format.Money(units, _settings);
@@ -349,7 +412,8 @@ internal sealed class MainForm : Form
 
         _settings.Save();
         _monitor.Reconfigure();
-        _spark.Capacity = Math.Max(120, (int)(TimeSpan.FromMinutes(15).TotalMilliseconds / _settings.SampleIntervalMs));
+        _spark.Capacity = SparkCapacity();
+        SyncStartupCheckbox();
         RefreshTotals();
     }
 
@@ -397,6 +461,7 @@ internal sealed class MainForm : Form
         }
 
         _monitor.Sampled -= OnSampled;
+        Theme.Changed -= OnThemeChanged;
         base.OnFormClosing(e);
     }
 
@@ -404,16 +469,13 @@ internal sealed class MainForm : Form
 
     private sealed class HeaderPanel : Control
     {
-        private readonly Settings _settings;
         private PowerSample _sample = PowerSample.Empty;
         private string _subtitle = string.Empty;
 
-        public HeaderPanel(Settings settings)
+        public HeaderPanel()
         {
-            _settings = settings;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
                      ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
-            BackColor = Theme.Bg;
         }
 
         public void Update(PowerSample sample, PowerMonitor monitor)
@@ -426,7 +488,7 @@ internal sealed class MainForm : Form
                 if (monitor.CpuName is { Length: > 0 } cpu) parts.Add(cpu);
                 if (monitor.GpuName is { Length: > 0 } gpu) parts.Add(gpu);
                 if (parts.Count == 0 && monitor.BatteryName is { Length: > 0 } pack) parts.Add("Battery " + pack);
-                _subtitle = string.Join("  ·  ", parts);
+                _subtitle = string.Join("   –   ", parts);
             }
 
             Invalidate();
@@ -437,64 +499,62 @@ internal sealed class MainForm : Form
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
-            var bounds = new RectangleF(14, 0, Width - 28, Height - 12);
-            using (var brush = new LinearGradientBrush(bounds, Theme.Panel, Theme.PanelHi, 15f))
-            using (var path = Theme.RoundedRect(bounds, 10f))
-            using (var pen = new Pen(Theme.Border))
+            using (var background = new SolidBrush(Theme.Bg))
             {
-                g.FillPath(brush, path);
-                g.DrawPath(pen, path);
+                g.FillRectangle(background, ClientRectangle);
             }
+
+            var bounds = new RectangleF(16, 0, Width - 32, Height - 12);
+            Theme.FillCard(g, bounds);
 
             using var title = new SolidBrush(Theme.Text);
             using var dim = new SolidBrush(Theme.TextDim);
 
-            g.DrawString("Juice Meter", Theme.Title, title, 30, 16);
-            if (_subtitle.Length > 0) g.DrawString(_subtitle, Theme.Small, dim, 32, 44);
+            g.DrawString("Juice Meter", Theme.Title, title, 30, 14);
+            if (_subtitle.Length > 0) g.DrawString(_subtitle, Theme.Small, dim, 32, 38);
 
             var sourceLabel = Theme.LabelFor(_sample.Source);
-            var sourceColour = Theme.ForSource(_sample.Source);
-            Theme.DrawPill(g, sourceLabel, new PointF(32, 66), sourceColour);
+            Theme.DrawChip(g, sourceLabel, new PointF(32, 62), Theme.ForSource(_sample.Source));
 
-            var pillWidth = Theme.PillSize(g, sourceLabel).Width;
-            Theme.DrawPill(g, Theme.LabelFor(_sample.Confidence), new PointF(32 + pillWidth + 8, 66),
+            var chipWidth = Theme.ChipSize(g, sourceLabel).Width;
+            Theme.DrawChip(g, Theme.LabelFor(_sample.Confidence), new PointF(32 + chipWidth + 8, 62),
                 Theme.ForConfidence(_sample.Confidence));
 
             // Live wattage, right aligned.
             var watts = _sample.OnAc ? _sample.WallWatts : _sample.SystemWatts;
             var value = watts.ToString("F1", CultureInfo.CurrentCulture);
 
-            using var big = new SolidBrush(Theme.Accent);
             var valueSize = g.MeasureString(value, Theme.Huge);
             var unitSize = g.MeasureString("W", Theme.Title);
             var right = bounds.Right - 24;
 
-            g.DrawString("W", Theme.Title, dim, right - unitSize.Width, 44);
-            g.DrawString(value, Theme.Huge, big, right - unitSize.Width - valueSize.Width + 6, 14);
+            g.DrawString("W", Theme.Title, dim, right - unitSize.Width, 38);
+            g.DrawString(value, Theme.Huge, title, right - unitSize.Width - valueSize.Width + 8, 10);
 
-            var caption = _sample.OnAc ? "drawn from the wall" : "drawn from the battery";
+            var caption = _sample.OnAc ? "from the wall" : "from the battery";
             var captionSize = g.MeasureString(caption, Theme.Small);
             g.DrawString(caption, Theme.Small, dim, right - captionSize.Width, 70);
 
+            string? detail = null;
+
             if (_sample.OnAc && _sample.SystemWatts > 0)
             {
-                var detail = $"system {_sample.SystemWatts:F1} W";
+                detail = $"system {_sample.SystemWatts:F1} W";
                 if (_sample.Source == PowerSource.AcCharging && _sample.BatteryWatts > 0)
                 {
-                    detail += $"  ·  charging {_sample.BatteryWatts:F1} W";
+                    detail += $"   charging {_sample.BatteryWatts:F1} W";
                 }
-
-                var detailSize = g.MeasureString(detail, Theme.Small);
-                g.DrawString(detail, Theme.Small, dim, right - detailSize.Width, 86);
             }
             else if (_sample.Runtime is { } runtime && runtime.TotalMinutes > 0)
             {
-                var detail = $"{Format.Hours(runtime.TotalSeconds)} remaining";
+                detail = $"{Format.Hours(runtime.TotalSeconds)} remaining";
+            }
+
+            if (detail is not null)
+            {
                 var detailSize = g.MeasureString(detail, Theme.Small);
                 g.DrawString(detail, Theme.Small, dim, right - detailSize.Width, 86);
             }
-
-            _ = _settings;
         }
     }
 
@@ -510,7 +570,6 @@ internal sealed class MainForm : Form
             _settings = settings;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
                      ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
-            BackColor = Theme.Bg;
         }
 
         public override void Refresh()
@@ -523,6 +582,11 @@ internal sealed class MainForm : Form
         {
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            using (var background = new SolidBrush(Theme.Bg))
+            {
+                g.FillRectangle(background, ClientRectangle);
+            }
 
             Theme.FillCard(g, new RectangleF(0, 0, Width - 1, Height - 1));
 
@@ -543,9 +607,9 @@ internal sealed class MainForm : Form
 
                 g.DrawString(label, isToday ? Theme.SmallBold : Theme.Small, isToday ? text : faint, 14, y);
 
-                var track = new RectangleF(72, y + 3, Width - 72 - 84, 10);
-                using (var trackBrush = new SolidBrush(Theme.PanelHi))
-                using (var path = Theme.RoundedRect(track, 5f))
+                var track = new RectangleF(72, y + 4, Width - 72 - 84, 9);
+                using (var trackBrush = new SolidBrush(Theme.Grid))
+                using (var path = Theme.RoundedRect(track, 2f))
                 {
                     g.FillPath(trackBrush, path);
                 }
@@ -553,9 +617,9 @@ internal sealed class MainForm : Form
                 var fraction = (float)(day.WallUnits / peak);
                 if (fraction > 0.005f)
                 {
-                    var fill = new RectangleF(track.X, track.Y, Math.Max(4f, track.Width * fraction), track.Height);
-                    using var fillBrush = new SolidBrush(isToday ? Theme.Accent : Theme.AccentDim);
-                    using var path = Theme.RoundedRect(fill, 5f);
+                    var fill = new RectangleF(track.X, track.Y, Math.Max(3f, track.Width * fraction), track.Height);
+                    using var fillBrush = new SolidBrush(isToday ? Theme.Accent : Color.FromArgb(130, Theme.Accent));
+                    using var path = Theme.RoundedRect(fill, 2f);
                     g.FillPath(fillBrush, path);
                 }
 
@@ -563,7 +627,7 @@ internal sealed class MainForm : Form
                 var unitsSize = g.MeasureString(units, Theme.Small);
                 g.DrawString(units, Theme.Small, isToday ? text : faint, Width - 16 - unitsSize.Width, y);
 
-                y += 24;
+                y += 23;
             }
 
             y += 12;
@@ -583,10 +647,13 @@ internal sealed class MainForm : Form
                 ? $"{sample.BaselineWatts:F1} W learned"
                 : $"{sample.BaselineWatts:F1} W (uncalibrated)");
 
-            Row(g, ref y, "Calibration", calibration.IsCalibrated
-                ? $"{calibration.GlobalSamples:N0} samples"
-                : $"{calibration.GlobalSamples:N0} / 120 samples");
+            Row(g, ref y, "Calibration", !_monitor.CpuPowerAvailable
+                ? "paused, needs admin"
+                : calibration.IsCalibrated
+                    ? $"{calibration.GlobalSamples:N0} samples"
+                    : $"{calibration.GlobalSamples:N0} / 120 samples");
 
+            if (_monitor.GpuSwitchedOff) Row(g, ref y, "Discrete GPU", "off (Eco)");
             if (sample.BrightnessPercent >= 0) Row(g, ref y, "Brightness", $"{sample.BrightnessPercent}%");
             if (sample.BatteryVolts > 0) Row(g, ref y, "Pack voltage", $"{sample.BatteryVolts:F2} V");
 
@@ -615,21 +682,18 @@ internal sealed class MainForm : Form
 
             g.DrawString(label, Theme.Small, labelBrush, 14, y);
 
-            var size = g.MeasureString(value, Theme.Small);
-            var maxWidth = Width - 28 - 90;
-
-            if (size.Width > maxWidth)
+            var maxWidth = Width - 28 - 92;
+            using var right = new StringFormat
             {
-                using var clipped = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap };
-                g.DrawString(value, Theme.Small, valueBrush,
-                    new RectangleF(Width - 14 - maxWidth, y, maxWidth, 18), clipped);
-            }
-            else
-            {
-                g.DrawString(value, Theme.Small, valueBrush, Width - 14 - size.Width, y);
-            }
+                Alignment = StringAlignment.Far,
+                Trimming = StringTrimming.EllipsisCharacter,
+                FormatFlags = StringFormatFlags.NoWrap,
+            };
 
-            y += 20;
+            g.DrawString(value, Theme.Small, valueBrush,
+                new RectangleF(Width - 14 - maxWidth, y, maxWidth, 18), right);
+
+            y += 19;
         }
     }
 }

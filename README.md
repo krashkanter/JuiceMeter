@@ -11,17 +11,9 @@ Built for a ROG Zephyrus M16 (GU603ZU, i7-12700H + RTX 4050) on Windows 11, but
 there is nothing model-specific in it: any Windows 10/11 laptop with a smart
 battery will work.
 
-```
-┌─ Juice Meter ──────────────────────────────────────────────────┐
-│  Juice Meter                                          23.4  W  │
-│  12th Gen Intel Core i7-12700H · NVIDIA RTX 4050               │
-│  [ ON BATTERY ]  [ MEASURED ]              drawn from the wall │
-├────────────────────────────────────────────────────────────────┤
-│  TODAY        │  SEPTEMBER    │  LIFETIME     │  BATTERY       │
-│  0.412        │  8.914        │  41.208       │  87%           │
-│  ₹3.30        │  ₹71.31       │  ₹329.66      │  58.2/66.3 Wh  │
-└────────────────────────────────────────────────────────────────┘
-```
+![Juice Meter dashboard](docs/screenshot.png)
+
+The UI follows the Windows light/dark setting, like G-Helper does.
 
 ---
 
@@ -112,6 +104,20 @@ no UAC prompt.
 > driver to read MSRs. Some anti-cheat software objects to this. Turn the
 > sensors off in Settings if that is a problem; you keep full battery accuracy.
 
+### Switching GPU modes
+
+Flipping G-Helper between Standard and Eco is safe. Eco does not merely disable
+the discrete GPU on these machines, it removes the devnode outright, and NVML
+does not survive its device vanishing: the next power read dereferences freed
+memory and raises an `AccessViolationException`, which .NET treats as a
+corrupted-state exception and cannot catch. The process just dies.
+
+Since there is no way to catch it, the call is never made. Juice Meter asks the
+configuration manager whether the GPU devnode is started immediately before
+every read, parks the GPU sensor the moment it goes away, and only rebuilds the
+sensor stack once the device is back and alive. While the dGPU is off it reports
+a real 0 W, which is the truth.
+
 ---
 
 ## Install
@@ -149,6 +155,7 @@ Right-click the tray icon for today's and this month's units at a glance.
 | --- | --- |
 | `--tray` | Start hidden in the notification area. |
 | `--probe [seconds]` | Console mode: dump every sensor reading and how the model turns it into watts, then exit. |
+| `--screenshot [file]` | Render the dashboard to a PNG and exit, for bug reports. Add `--settings` for the settings window, or `--light` / `--dark` to force a theme. The meter it spins up is read-only, so a screenshot never adds watt-hours to your ledger. |
 
 `--probe` is the fastest way to see what your machine actually exposes:
 
@@ -165,6 +172,8 @@ Hardware sensors
   status      : CPU unavailable, GPU ok
   cpu         : 12th Gen Intel Core i7-12700H (power no)
   gpu         : NVIDIA GeForce RTX 4050 Laptop GPU (power yes)
+  dgpu devnode: PCI\VEN_10DE&DEV_28A1&SUBSYS_1D931043&REV_A1\4&1a2b3c4d&0&0008
+  dgpu running: True
 
 time      source       batt_W    cpu_W    gpu_W   base_W  system_W    wall_W
 --------  -----------  -------  -------  -------  -------  --------  --------

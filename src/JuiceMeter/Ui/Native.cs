@@ -24,12 +24,12 @@ internal static class Native
 
     public const int ATTACH_PARENT_PROCESS = -1;
 
-    /// <summary>Paints the title bar dark so the window does not look half-themed.</summary>
-    public static void UseDarkTitleBar(IntPtr handle)
+    /// <summary>Keeps the title bar in step with the rest of the window.</summary>
+    public static void SetTitleBarTheme(IntPtr handle, bool dark)
     {
         if (handle == IntPtr.Zero) return;
 
-        var enabled = 1;
+        var enabled = dark ? 1 : 0;
         if (DwmSetWindowAttribute(handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref enabled, sizeof(int)) != 0)
         {
             // Windows 10 builds before 19041 used a different attribute id.

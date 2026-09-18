@@ -53,7 +53,7 @@ internal sealed class SettingsForm : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        Native.UseDarkTitleBar(Handle);
+        Native.SetTitleBarTheme(Handle, !Theme.IsLight);
     }
 
     private void Build()
@@ -111,13 +111,10 @@ internal sealed class SettingsForm : Form
         {
             Text = "Forget the learned baseline",
             AutoSize = true,
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Theme.Panel,
-            ForeColor = Theme.Text,
             Margin = new Padding(0, 0, 0, 10),
         };
 
-        resetCalibration.FlatAppearance.BorderColor = Theme.Border;
+        Theme.StyleButton(resetCalibration);
         resetCalibration.Click += (_, _) =>
         {
             _monitor.State.Calibration.Reset();
@@ -127,7 +124,7 @@ internal sealed class SettingsForm : Form
 
         Wide(layout, resetCalibration);
 
-        var footer = new Panel { Dock = DockStyle.Bottom, Height = 58, BackColor = Theme.Panel, Padding = new Padding(18, 12, 18, 12) };
+        var footer = new Panel { Dock = DockStyle.Bottom, Height = 58, BackColor = Theme.Card, Padding = new Padding(18, 12, 18, 12) };
 
         var ok = new Button
         {
@@ -136,11 +133,8 @@ internal sealed class SettingsForm : Form
             Width = 110,
             Height = 34,
             Dock = DockStyle.Right,
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Theme.AccentDim,
-            ForeColor = Color.White,
         };
-        ok.FlatAppearance.BorderColor = Theme.Accent;
+        Theme.StyleButton(ok, primary: true);
         ok.Click += OnSave;
 
         var cancel = new Button
@@ -150,15 +144,12 @@ internal sealed class SettingsForm : Form
             Width = 110,
             Height = 34,
             Dock = DockStyle.Right,
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Theme.Panel,
-            ForeColor = Theme.Text,
             Margin = new Padding(8, 0, 0, 0),
         };
-        cancel.FlatAppearance.BorderColor = Theme.Border;
+        Theme.StyleButton(cancel);
 
         footer.Controls.Add(cancel);
-        footer.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 8, BackColor = Theme.Panel });
+        footer.Controls.Add(new Panel { Dock = DockStyle.Right, Width = 8, BackColor = Theme.Card });
         footer.Controls.Add(ok);
 
         AcceptButton = ok;
@@ -327,14 +318,14 @@ internal sealed class SettingsForm : Form
         switch (control)
         {
             case NumericUpDown spin:
-                spin.BackColor = Theme.PanelHi;
+                spin.BackColor = (Theme.IsLight ? Color.White : Theme.CardHover);
                 spin.ForeColor = Theme.Text;
                 spin.BorderStyle = BorderStyle.FixedSingle;
                 spin.Width = 120;
                 break;
 
             case TextBox box:
-                box.BackColor = Theme.PanelHi;
+                box.BackColor = (Theme.IsLight ? Color.White : Theme.CardHover);
                 box.ForeColor = Theme.Text;
                 box.BorderStyle = BorderStyle.FixedSingle;
                 break;

@@ -18,6 +18,11 @@ internal static class Program
             return Probe.Run(args);
         }
 
+        if (args.Any(a => a.Equals("--screenshot", StringComparison.OrdinalIgnoreCase)))
+        {
+            return Screenshot.Run(args);
+        }
+
         using var mutex = new Mutex(initiallyOwned: true, MutexName, out var isFirstInstance);
 
         if (!isFirstInstance)
@@ -155,10 +160,16 @@ internal static class Probe
         using var hardware = new HardwareReader();
         hardware.TryOpen();
 
+        var dgpu = new DiscreteGpu();
+
         Console.WriteLine("Hardware sensors");
         Console.WriteLine($"  status      : {hardware.Status}");
         Console.WriteLine($"  cpu         : {hardware.CpuName ?? "-"} (power {(hardware.CpuPowerAvailable ? "yes" : "no")})");
         Console.WriteLine($"  gpu         : {hardware.GpuName ?? "-"} (power {(hardware.GpuPowerAvailable ? "yes" : "no")})");
+        var dgpuRunning = dgpu.IsRunning();
+        Console.WriteLine($"  dgpu devnode: {dgpu.DeviceInstanceId ?? "not present (Eco mode removes it entirely)"}");
+        Console.WriteLine($"  dgpu running: {dgpuRunning}"
+                          + (dgpuRunning ? string.Empty : "   <- NVML will not be called"));
         Console.WriteLine();
 
         var brightness = BrightnessReader.TryRead();
@@ -174,7 +185,7 @@ internal static class Probe
         for (var i = 0; i < seconds; i++)
         {
             var reading = battery.Read();
-            var (cpu, gpu) = hardware.Available ? hardware.Read() : (double.NaN, double.NaN);
+            var (cpu, gpu) = hardware.Read();
 
             var source = !reading.AcOnline
                 ? "battery"

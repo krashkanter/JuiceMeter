@@ -13,29 +13,29 @@ namespace JuiceMeter.Sensors;
 /// comes from NVML and usually works unelevated. Everything here degrades
 /// quietly: without these sensors Juice Meter still measures accurately on
 /// battery, it just has a coarser model while on AC.
+///
+/// Note the deliberate absence of an IVisitor. Traversing the whole tree would
+/// call Update on the NVIDIA node even when the dGPU has been switched off, and
+/// that is fatal -- see <see cref="DiscreteGpu"/>. Each device is updated
+/// individually so the GPU can be skipped.
 /// </summary>
 internal sealed class HardwareReader : IDisposable
 {
-    private sealed class UpdateVisitor : IVisitor
-    {
-        public void VisitComputer(IComputer computer) => computer.Traverse(this);
-
-        public void VisitHardware(IHardware hardware)
-        {
-            hardware.Update();
-            foreach (var sub in hardware.SubHardware) sub.Accept(this);
-        }
-
-        public void VisitSensor(ISensor sensor) { }
-        public void VisitParameter(IParameter parameter) { }
-    }
+    private readonly DiscreteGpu _dgpu = new();
+    private readonly object _gate = new();
 
     private Computer? _computer;
-    private readonly UpdateVisitor _visitor = new();
+
+    /// <summary>LibreHardwareMonitor currently holds a live NVIDIA node we may poll.</summary>
+    private bool _nvidiaInComputer;
 
     public bool Available { get; private set; }
     public bool CpuPowerAvailable { get; private set; }
     public bool GpuPowerAvailable { get; private set; }
+
+    /// <summary>The machine has a dGPU but it is currently switched off (Eco mode).</summary>
+    public bool GpuSwitchedOff { get; private set; }
+
     public string? CpuName { get; private set; }
     public string? GpuName { get; private set; }
     public string Status { get; private set; } = "Not started";
@@ -58,12 +58,22 @@ internal sealed class HardwareReader : IDisposable
 
     public bool TryOpen()
     {
+        lock (_gate) return OpenLocked();
+    }
+
+    private bool OpenLocked()
+    {
         try
         {
+            var nvidiaRunning = _dgpu.IsRunning();
+
+            // GPU support stays on for machines with an AMD or no discrete part;
+            // only the NVIDIA node is gated, because NVML is the one that faults
+            // when its device disappears.
             _computer = new Computer
             {
                 IsCpuEnabled = true,
-                IsGpuEnabled = true,
+                IsGpuEnabled = nvidiaRunning || !_dgpu.EverSeen,
                 IsMotherboardEnabled = false,
                 IsMemoryEnabled = false,
                 IsStorageEnabled = false,
@@ -74,13 +84,17 @@ internal sealed class HardwareReader : IDisposable
             };
 
             _computer.Open();
-            _computer.Accept(_visitor);
+
+            CpuPowerAvailable = false;
+            GpuPowerAvailable = false;
+            _nvidiaInComputer = false;
 
             foreach (var hardware in _computer.Hardware)
             {
                 switch (hardware.HardwareType)
                 {
                     case HardwareType.Cpu:
+                        hardware.Update();
                         CpuName ??= hardware.Name;
                         if (FindCpuPower(hardware) is not null) CpuPowerAvailable = true;
                         break;
@@ -89,67 +103,128 @@ internal sealed class HardwareReader : IDisposable
                     // GPU already sits inside the CPU package reading, and counting
                     // it separately would double up.
                     case HardwareType.GpuNvidia:
+                        if (!nvidiaRunning) break;
+                        _nvidiaInComputer = true;
+                        goto case HardwareType.GpuAmd;
+
                     case HardwareType.GpuAmd:
-                        GpuName ??= hardware.Name;
+                        hardware.Update();
+                        GpuName = hardware.Name;
                         if (FindGpuPower(hardware) is not null) GpuPowerAvailable = true;
                         break;
                 }
             }
 
+            GpuSwitchedOff = _dgpu.EverSeen && !nvidiaRunning;
             Available = CpuPowerAvailable || GpuPowerAvailable;
 
-            Status = Available
-                ? $"CPU {(CpuPowerAvailable ? "ok" : "unavailable")}, GPU {(GpuPowerAvailable ? "ok" : "unavailable")}"
-                : IsElevated
-                    ? "No power sensors exposed by this hardware"
-                    : "Needs administrator for CPU package power";
-
+            Status = BuildStatus();
             Log.Info($"Hardware sensors: {Status} (cpu={CpuName}, gpu={GpuName}, elevated={IsElevated})");
+
             return Available;
         }
         catch (Exception ex)
         {
-            Status = IsElevated
-                ? "Sensor driver failed to load"
-                : "Needs administrator for CPU/GPU power sensors";
+            Status = IsElevated ? "Sensor driver failed to load" : "Needs administrator for CPU/GPU power sensors";
             Log.Error("Could not start hardware sensors", ex);
-            Close();
+            CloseLocked();
             return false;
         }
+    }
+
+    private string BuildStatus()
+    {
+        if (GpuSwitchedOff)
+        {
+            return CpuPowerAvailable
+                ? "CPU ok, GPU switched off (Eco)"
+                : "CPU unavailable, GPU switched off (Eco)";
+        }
+
+        if (!Available)
+        {
+            return IsElevated
+                ? "No power sensors exposed by this hardware"
+                : "Needs administrator for CPU package power";
+        }
+
+        return $"CPU {(CpuPowerAvailable ? "ok" : "unavailable")}, GPU {(GpuPowerAvailable ? "ok" : "unavailable")}";
     }
 
     /// <summary>Package power in watts. NaN for anything we cannot read.</summary>
     public (double CpuWatts, double GpuWatts) Read()
     {
-        if (_computer is null) return (double.NaN, double.NaN);
-
-        double cpu = double.NaN, gpu = double.NaN;
-
-        try
+        lock (_gate)
         {
-            _computer.Accept(_visitor);
+            if (_computer is null) return (double.NaN, double.NaN);
 
-            foreach (var hardware in _computer.Hardware)
+            // Checked immediately before use, on purpose: the gap between this
+            // and the NVML call is the entire window in which a mode switch
+            // could still catch us out.
+            var nvidiaRunning = _dgpu.IsRunning();
+
+            if (!nvidiaRunning && _nvidiaInComputer)
             {
-                switch (hardware.HardwareType)
-                {
-                    case HardwareType.Cpu:
-                        if (FindCpuPower(hardware) is { } c) cpu = double.IsNaN(cpu) ? c : cpu + c;
-                        break;
+                // The dGPU just went away. Do NOT tear the monitor down here:
+                // closing it would run NVML shutdown against a device that has
+                // already gone. Park the GPU node instead and never touch it
+                // again, which costs nothing and cannot fault.
+                _nvidiaInComputer = false;
+                GpuSwitchedOff = true;
+                GpuPowerAvailable = false;
+                Available = CpuPowerAvailable;
+                Status = BuildStatus();
 
-                    case HardwareType.GpuNvidia:
-                    case HardwareType.GpuAmd:
-                        if (FindGpuPower(hardware) is { } g) gpu = double.IsNaN(gpu) ? g : gpu + g;
-                        break;
+                Log.Info("Discrete GPU switched off; GPU sensors parked");
+            }
+            else if (nvidiaRunning && !_nvidiaInComputer)
+            {
+                // It is back, and alive, so a full rebuild is safe now: the
+                // teardown will run against a device that exists again.
+                Log.Info("Discrete GPU came back; restarting sensors");
+
+                CloseLocked();
+                OpenLocked();
+
+                if (_computer is null) return (double.NaN, double.NaN);
+            }
+
+            double cpu = double.NaN, gpu = double.NaN;
+
+            try
+            {
+                foreach (var hardware in _computer.Hardware)
+                {
+                    switch (hardware.HardwareType)
+                    {
+                        case HardwareType.Cpu:
+                            hardware.Update();
+                            if (FindCpuPower(hardware) is { } c) cpu = double.IsNaN(cpu) ? c : cpu + c;
+                            break;
+
+                        case HardwareType.GpuNvidia when !_nvidiaInComputer:
+                            // Parked. Touching this node is what kills the process.
+                            break;
+
+                        case HardwareType.GpuNvidia:
+                        case HardwareType.GpuAmd:
+                            hardware.Update();
+                            if (FindGpuPower(hardware) is { } g) gpu = double.IsNaN(gpu) ? g : gpu + g;
+                            break;
+                    }
                 }
             }
-        }
-        catch (Exception ex)
-        {
-            Log.Error("Hardware sensor read failed", ex);
-        }
+            catch (Exception ex)
+            {
+                Log.Error("Hardware sensor read failed", ex);
+            }
 
-        return (Sane(cpu, 200), Sane(gpu, 400));
+            // A dGPU that is switched off genuinely draws nothing, so report a
+            // real zero rather than "unknown" and keep the AC model calibrated.
+            if (GpuSwitchedOff) gpu = 0;
+
+            return (Sane(cpu, 200), Sane(gpu, 400));
+        }
     }
 
     private static double Sane(double watts, double max) =>
@@ -193,7 +268,7 @@ internal sealed class HardwareReader : IDisposable
         return null;
     }
 
-    private void Close()
+    private void CloseLocked()
     {
         try
         {
@@ -207,8 +282,13 @@ internal sealed class HardwareReader : IDisposable
         {
             _computer = null;
             Available = false;
+            GpuPowerAvailable = false;
+            CpuPowerAvailable = false;
         }
     }
 
-    public void Dispose() => Close();
+    public void Dispose()
+    {
+        lock (_gate) CloseLocked();
+    }
 }

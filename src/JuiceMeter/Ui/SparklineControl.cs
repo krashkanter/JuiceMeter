@@ -2,7 +2,7 @@ using System.Drawing.Drawing2D;
 
 namespace JuiceMeter.Ui;
 
-/// <summary>Rolling watts chart: filled area for system draw, line for wall draw.</summary>
+/// <summary>Rolling watts chart: flat area for system draw, dashed line for wall draw.</summary>
 internal sealed class SparklineControl : Control
 {
     private readonly struct Point3
@@ -38,7 +38,6 @@ internal sealed class SparklineControl : Control
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
                  ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
-        BackColor = Theme.Bg;
     }
 
     public void Push(double systemWatts, double wallWatts, bool onAc)
@@ -64,10 +63,14 @@ internal sealed class SparklineControl : Control
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
-        var bounds = new RectangleF(0, 0, Width - 1, Height - 1);
-        Theme.FillCard(g, bounds);
+        using (var background = new SolidBrush(Theme.Bg))
+        {
+            g.FillRectangle(background, ClientRectangle);
+        }
 
-        var plot = new RectangleF(14, 34, Width - 28, Height - 52);
+        Theme.FillCard(g, new RectangleF(0, 0, Width - 1, Height - 1));
+
+        var plot = new RectangleF(46, 36, Width - 62, Height - 76);
         if (plot.Width <= 10 || plot.Height <= 10) return;
 
         using (var captionBrush = new SolidBrush(Theme.TextDim))
@@ -87,9 +90,7 @@ internal sealed class SparklineControl : Control
         var peak = 1f;
         foreach (var p in data) peak = Math.Max(peak, Math.Max(p.System, p.Wall));
 
-        // Round the ceiling up to something readable.
         var ceiling = NiceCeiling(peak);
-
         DrawGrid(g, plot, ceiling);
 
         var step = plot.Width / (data.Length - 1);
@@ -104,27 +105,24 @@ internal sealed class SparklineControl : Control
             wallPoints[i] = new PointF(x, plot.Bottom - data[i].Wall / ceiling * plot.Height);
         }
 
-        // Filled area under the system curve.
         var area = new PointF[systemPoints.Length + 2];
         Array.Copy(systemPoints, area, systemPoints.Length);
         area[^2] = new PointF(plot.Right, plot.Bottom);
         area[^1] = new PointF(plot.X, plot.Bottom);
 
-        using (var fill = new LinearGradientBrush(plot,
-                   Color.FromArgb(92, Theme.Accent), Color.FromArgb(12, Theme.Accent), 90f))
+        using (var fill = new SolidBrush(Color.FromArgb(Theme.IsLight ? 34 : 46, Theme.Accent)))
         {
             g.FillPolygon(fill, area);
         }
 
-        using (var pen = new Pen(Theme.Accent, 1.6f))
+        using (var pen = new Pen(Theme.Accent, 1.5f))
         {
             g.DrawLines(pen, systemPoints);
         }
 
-        // Wall draw only means anything while plugged in.
         if (data.Any(p => p.OnAc))
         {
-            using var pen = new Pen(Color.FromArgb(190, Theme.Cpu), 1.3f) { DashStyle = DashStyle.Dash };
+            using var pen = new Pen(Theme.Cpu, 1.3f) { DashStyle = DashStyle.Dash };
             g.DrawLines(pen, wallPoints);
         }
 
@@ -133,22 +131,24 @@ internal sealed class SparklineControl : Control
 
     private static void DrawGrid(Graphics g, RectangleF plot, float ceiling)
     {
-        using var pen = new Pen(Color.FromArgb(38, 255, 255, 255));
+        using var pen = new Pen(Theme.Grid);
         using var text = new SolidBrush(Theme.TextFaint);
+
+        using var right = new StringFormat { Alignment = StringAlignment.Far };
 
         for (var i = 0; i <= 4; i++)
         {
             var y = plot.Bottom - plot.Height / 4f * i;
             g.DrawLine(pen, plot.X, y, plot.Right, y);
 
-            var label = (ceiling / 4f * i).ToString("F0") + " W";
-            g.DrawString(label, Theme.Small, text, plot.X - 2, y - 14);
+            var label = (ceiling / 4f * i).ToString("F0");
+            g.DrawString(label, Theme.Small, text, new RectangleF(0, y - 7, plot.X - 8, 16), right);
         }
     }
 
     private void DrawLegend(Graphics g, RectangleF plot, Point3 latest)
     {
-        var y = plot.Bottom + 6;
+        var y = plot.Bottom + 8;
         var x = plot.X;
 
         x = LegendItem(g, x, y, Theme.Accent, $"System {latest.System:F1} W", false);

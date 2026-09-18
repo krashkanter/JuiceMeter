@@ -77,9 +77,9 @@ internal sealed class JuiceMeterContext : ApplicationContext
     {
         var menu = new ContextMenuStrip
         {
-            BackColor = Theme.Panel,
+            BackColor = Theme.Card,
             ForeColor = Theme.Text,
-            Renderer = new DarkMenuRenderer(),
+            Renderer = new ThemedMenuRenderer(),
             ShowImageMargin = false,
         };
 
@@ -303,9 +303,9 @@ internal sealed class JuiceMeterContext : ApplicationContext
     }
 
     /// <summary>Flat dark menu so the applet matches the dashboard.</summary>
-    private sealed class DarkMenuRenderer : ToolStripProfessionalRenderer
+    private sealed class ThemedMenuRenderer : ToolStripProfessionalRenderer
     {
-        public DarkMenuRenderer() : base(new DarkColours()) { }
+        public ThemedMenuRenderer() : base(new ThemeColours()) { }
 
         protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
         {
@@ -319,17 +319,17 @@ internal sealed class JuiceMeterContext : ApplicationContext
             e.Graphics.DrawRectangle(pen, 0, 0, e.AffectedBounds.Width - 1, e.AffectedBounds.Height - 1);
         }
 
-        private sealed class DarkColours : ProfessionalColorTable
+        private sealed class ThemeColours : ProfessionalColorTable
         {
-            public override Color ToolStripDropDownBackground => Theme.Panel;
-            public override Color MenuItemSelected => Theme.PanelHi;
-            public override Color MenuItemSelectedGradientBegin => Theme.PanelHi;
-            public override Color MenuItemSelectedGradientEnd => Theme.PanelHi;
-            public override Color MenuItemBorder => Theme.AccentDim;
+            public override Color ToolStripDropDownBackground => Theme.Card;
+            public override Color MenuItemSelected => Theme.CardHover;
+            public override Color MenuItemSelectedGradientBegin => Theme.CardHover;
+            public override Color MenuItemSelectedGradientEnd => Theme.CardHover;
+            public override Color MenuItemBorder => Theme.Accent;
             public override Color MenuBorder => Theme.Border;
-            public override Color ImageMarginGradientBegin => Theme.Panel;
-            public override Color ImageMarginGradientMiddle => Theme.Panel;
-            public override Color ImageMarginGradientEnd => Theme.Panel;
+            public override Color ImageMarginGradientBegin => Theme.Card;
+            public override Color ImageMarginGradientMiddle => Theme.Card;
+            public override Color ImageMarginGradientEnd => Theme.Card;
             public override Color SeparatorDark => Theme.Border;
             public override Color SeparatorLight => Theme.Border;
         }

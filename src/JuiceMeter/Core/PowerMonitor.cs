@@ -55,6 +55,7 @@ public sealed class PowerMonitor : IDisposable
     public bool HardwareSensorsAvailable => _hardware.Available;
     public bool CpuPowerAvailable => _hardware.CpuPowerAvailable;
     public bool GpuPowerAvailable => _hardware.GpuPowerAvailable;
+    public bool GpuSwitchedOff => _hardware.GpuSwitchedOff;
     public string HardwareStatus => _hardware.Status;
     public string? CpuName => _hardware.CpuName;
     public string? GpuName => _hardware.GpuName;
@@ -62,11 +63,19 @@ public sealed class PowerMonitor : IDisposable
     public string? BatteryManufacturer => _battery.Manufacturer;
     public string? BatteryChemistry => _battery.Chemistry;
 
-    public PowerMonitor(Settings settings, AppState state, HistoryStore history)
+    /// <summary>
+    /// Read-only meters sample the sensors and raise events but never write to
+    /// the ledger. Used by the screenshot mode so it cannot double-count against
+    /// a copy that is already running.
+    /// </summary>
+    private readonly bool _readOnly;
+
+    public PowerMonitor(Settings settings, AppState state, HistoryStore history, bool readOnly = false)
     {
         _settings = settings;
         _state = state;
         _history = history;
+        _readOnly = readOnly;
     }
 
     public void Start()
@@ -153,7 +162,10 @@ public sealed class PowerMonitor : IDisposable
         }
 
         var battery = _battery.Read();
-        var (cpu, gpu) = _hardware.Available ? _hardware.Read() : (double.NaN, double.NaN);
+        // Always go through Read when sensors are enabled, even if nothing is
+        // currently readable: that call is also what notices the discrete GPU
+        // being switched off or coming back.
+        var (cpu, gpu) = _settings.EnableHardwareSensors ? _hardware.Read() : (double.NaN, double.NaN);
 
         var source = ResolveSource(battery);
         var batteryWatts = battery.RateKnown ? battery.Watts : 0;
@@ -254,6 +266,8 @@ public sealed class PowerMonitor : IDisposable
     {
         var previous = _previous;
         _previous = current;
+
+        if (_readOnly) return;
 
         if (previous is null || dt <= 0)
         {
@@ -496,6 +510,8 @@ public sealed class PowerMonitor : IDisposable
     /// <summary>Writes the in-flight minute out and saves state. Called on exit.</summary>
     public void Flush()
     {
+        if (_readOnly) return;
+
         lock (_gate)
         {
             try
